@@ -1,8 +1,12 @@
-﻿"""Permission gate for acquisition actions (dependency-injected)."""
+﻿"""Permission gate for acquisition actions (dependency-injected).
+
+Implements the Codex PolicyPort contract (default-deny).
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol
+from urllib.parse import urlparse
 
 
 @dataclass(frozen=True)
@@ -20,29 +24,35 @@ class PolicyPort(Protocol):
 
 class DenyAllPolicy:
     def authorize(self, *, source_id: str, action: str, target_url: str) -> AccessDecision:
-        return AccessDecision(allowed=False, reason_code="DENY_ALL_DEFAULT")
+        return AccessDecision(allowed=False, reason_code="DENY_ALL_DEFAULT", policy_version=None, expires_at=None, permitted_scope=())
 
 
 class AllowFixturePolicy:
-    def __init__(self, allowed_sources: set[str] | None = None, allowed_actions: set[str] | None = None, allowed_domains: set[str] | None = None):
-        self.allowed_sources = allowed_sources or set()
-        self.allowed_actions = allowed_actions or set()
-        self.allowed_domains = allowed_domains or set()
+    def __init__(self, allowed_sources: set[str] | None = None, allowed_actions: set[str] | None = None, allowed_domains: set[str] | None = None, policy_version: str | None = "v1"):
+        self.allowed_sources = set(allowed_sources or set())
+        self.allowed_actions = set(allowed_actions or set())
+        self.allowed_domains = set(allowed_domains or set())
+        self.policy_version = policy_version
 
     def authorize(self, *, source_id: str, action: str, target_url: str) -> AccessDecision:
-        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(target_url)
+            hostname = parsed.hostname or ""
+        except Exception:
+            return AccessDecision(allowed=False, reason_code="INVALID_TARGET_URL", policy_version=self.policy_version)
 
         if self.allowed_sources and source_id not in self.allowed_sources:
-            return AccessDecision(allowed=False, reason_code="SOURCE_NOT_ALLOWED")
+            return AccessDecision(allowed=False, reason_code="SOURCE_NOT_ALLOWED", policy_version=self.policy_version)
         if self.allowed_actions and action not in self.allowed_actions:
-            return AccessDecision(allowed=False, reason_code="ACTION_NOT_ALLOWED")
+            return AccessDecision(allowed=False, reason_code="ACTION_NOT_ALLOWED", policy_version=self.policy_version)
         if self.allowed_domains:
-            try:
-                parsed = urlparse(target_url)
-                if parsed.hostname not in self.allowed_domains and f".{parsed.hostname}" not in {f".{d}" for d in self.allowed_domains}:
-                    # simple exact check; keep tight for fixtures
-                    if parsed.hostname not in self.allowed_domains:
-                        return AccessDecision(allowed=False, reason_code="DOMAIN_NOT_ALLOWED")
-            except Exception:
-                return AccessDecision(allowed=False, reason_code="INVALID_TARGET_URL")
-        return AccessDecision(allowed=True, reason_code="ALLOWED")
+            if hostname not in self.allowed_domains:
+                # allow subdomains
+                allowed = False
+                for d in self.allowed_domains:
+                    if hostname == d or hostname.endswith(f".{d}"):
+                        allowed = True
+                        break
+                if not allowed:
+                    return AccessDecision(allowed=False, reason_code="DOMAIN_NOT_ALLOWED", policy_version=self.policy_version)
+        return AccessDecision(allowed=True, reason_code="ALLOWED", policy_version=self.policy_version)

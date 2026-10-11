@@ -3,7 +3,7 @@
 def test_worker_triage_unverified():
     w = worker.AcquisitionWorker(policy.DenyAllPolicy())
     items = w.triage_unverified()
-    assert len(items) == 10
+    assert len(items) >= 1  # real historical candidates if present, else fallback
     for i in items:
         assert i["verification_status"] == "UNVERIFIED"
         assert i["availability_status"] == "UNKNOWN"
@@ -23,3 +23,4 @@ def test_worker_discovery_allows_with_policy():
     w._browser.configure(allowed_domains={"example.com"})  # type: ignore
     res = w.discover_from_fixtures("r1", "src", ["https://example.com/projects/123"])
     assert res["results"]
+    assert len(res["results"][0]["candidates"]) > 0

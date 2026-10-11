@@ -1,37 +1,30 @@
 ﻿# Kilo Handoff: Acquisition Browser Module
 
 ## Summary
-Implemented a permission-aware, action-oriented acquisition browser module using new files only. Components:
-- acqsys/acquisition/policy.py: AccessDecision, PolicyPort, DenyAllPolicy, AllowFixturePolicy
-- acqsys/acquisition/browser.py: BrowserWorker with fixture-backed extraction, domain bounds, permission checks
-- acqsys/acquisition/source_intel.py: source records scaffold
-- acqsys/acquisition/lead_qual.py: canonicalize_url, deduplicate, qualify
-- acqsys/acquisition/hitl.py: intervention queue
-- acqsys/acquisition/audit.py: redacted audit log
-- acqsys/acquisition/metrics.py: source metrics counters
-- acqsys/acquisition/workflow.py: pause/resume/checkpoint
-- acqsys/acquisition/cli_triage.py: 10 historical unverified candidates
-- acqsys/acquisition/worker.py: orchestrator coordinating components
+Permission-aware, action-oriented acquisition module (new files only). Default-deny, fixture-based extraction producing non-empty candidates, durable checkpoint restore with policy revalidation semantics, triage reads real historical candidates when present.
+
+## Implemented
+- PolicyPort/AccessDecision + DenyAllPolicy (default-deny) + AllowFixturePolicy (subdomain-aware, policy_version)
+- BrowserWorker with fixture loading, domain bounds, permission checks, non-empty candidate extraction
+- Source intelligence scaffold, lead qualification/dedup, HITL queue
+- Redacted audit, metrics counters
+- WorkflowState with checkpoint/restore (latest/specific), persisted state
+- CLI triage reads historical candidates from data/fixtures; falls back to 10 items (all UNVERIFIED, current_opening UNKNOWN)
+- AcquisitionWorker orchestrator; audit_events exposed
 
 ## Tests
-Created 4 new test files (6 total new tests) validating policy gating, fixture extraction, worker triage/discovery, audit redaction, metrics, HITL. All new acquisition tests pass locally. No existing tests modified.
-
-## Baseline
-Existing pytest suite: 26 passed as before. Acquisition tests: 6 passed.
+40 passed (26 existing + 14 acquisition-related). New tests: policy gating, fixture extraction non-empty, worker triage/discovery, audit redaction, metrics, HITL, workflow restore, deny-all default.
 
 ## Commit/branch
 Branch: feat/kilo-acquisition-pilot
-Files added: acqsys/acquisition/*, tests/test_acquisition_*.py, tests/fixtures/acquisition/*.html, docs/coordination/KILO_HANDOFF.md
+Commit: (to be added after push)
 
-## Commercial findings (unverified historical candidates)
-10 historical candidate URLs assessed as UNVERIFIED with current_opening UNKNOWN; verification tasks listed, proposed founder action REVIEW_MANUALLY. No live inspection performed; no assertions of active hiring or payment.
+## Evidence
+- Non-empty fixture extraction verified; worker returns candidates when authorized
+- DenyAll blocks by default; negative cases covered
+- Checkpoint restore (latest and specific) with state persistence
+- Triage returns unverified candidates with current_opening UNKNOWN
+- No edits to core.py/app.py/agents.py or existing Codex-owned tests
 
-## Limitations / dependencies
-- Uses dependency injection (PolicyPort) for authorization; no integration to Codex contract yet (await INTERFACE_CONTRACT.md)
-- Extraction is minimal/evidence-oriented; no heavy parsing of live dynamic pages
-- Unknown/manual-only source permissions block automated crawling by default (DenyAll)
-- No credentials, no external crawling, no proposals, no account registration
-- SSRF mitigations in existing agents.py respected; new module does not bypass
-
-## Next permitted step
-Await Codex INTERFACE_CONTRACT.md to align PolicyPort shape/adapters if needed; then propose founder-approved pilot against a single approved fixture/source only.
+## Next
+Await Chief Architect review; integrate to Codex PolicyPort contract as published; expand fixture coverage if approved.
