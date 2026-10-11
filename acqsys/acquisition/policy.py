@@ -1,0 +1,48 @@
+﻿"""Permission gate for acquisition actions (dependency-injected)."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Protocol
+
+
+@dataclass(frozen=True)
+class AccessDecision:
+    allowed: bool
+    reason_code: str
+    policy_version: str | None = None
+    expires_at: str | None = None
+    permitted_scope: tuple[str, ...] = ()
+
+
+class PolicyPort(Protocol):
+    def authorize(self, *, source_id: str, action: str, target_url: str) -> AccessDecision: ...
+
+
+class DenyAllPolicy:
+    def authorize(self, *, source_id: str, action: str, target_url: str) -> AccessDecision:
+        return AccessDecision(allowed=False, reason_code="DENY_ALL_DEFAULT")
+
+
+class AllowFixturePolicy:
+    def __init__(self, allowed_sources: set[str] | None = None, allowed_actions: set[str] | None = None, allowed_domains: set[str] | None = None):
+        self.allowed_sources = allowed_sources or set()
+        self.allowed_actions = allowed_actions or set()
+        self.allowed_domains = allowed_domains or set()
+
+    def authorize(self, *, source_id: str, action: str, target_url: str) -> AccessDecision:
+        from urllib.parse import urlparse
+
+        if self.allowed_sources and source_id not in self.allowed_sources:
+            return AccessDecision(allowed=False, reason_code="SOURCE_NOT_ALLOWED")
+        if self.allowed_actions and action not in self.allowed_actions:
+            return AccessDecision(allowed=False, reason_code="ACTION_NOT_ALLOWED")
+        if self.allowed_domains:
+            try:
+                parsed = urlparse(target_url)
+                if parsed.hostname not in self.allowed_domains and f".{parsed.hostname}" not in {f".{d}" for d in self.allowed_domains}:
+                    # simple exact check; keep tight for fixtures
+                    if parsed.hostname not in self.allowed_domains:
+                        return AccessDecision(allowed=False, reason_code="DOMAIN_NOT_ALLOWED")
+            except Exception:
+                return AccessDecision(allowed=False, reason_code="INVALID_TARGET_URL")
+        return AccessDecision(allowed=True, reason_code="ALLOWED")
