@@ -7,16 +7,20 @@ against privileged database replacement. Back up off-host for meaningful tamper 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
 import sqlite3
 import threading
 import uuid
+from contextvars import ContextVar
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from typing import Protocol
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 DB_PATH = Path(os.getenv('ACQ_DB_PATH', str(Path(__file__).parent.parent / 'data' / 'acquisition.db')))
 WRITE_LOCK = threading.RLock()
@@ -68,12 +72,47 @@ SOURCE_LIFECYCLE_TRANSITIONS={
     'RETIRED':set(),
 }
 ACCESS_POLICY_STATES=('UNKNOWN','RESEARCHING','AWAITING_REVIEW','CONFIRMED','UNCLEAR','PROHIBITED','EXPIRED','REVOKED')
-PERMISSION_KEYS=('public_reading','official_api','browser_navigation','authenticated_extraction','messaging','application_submission','manual_browser_access','human_supplied_lead_processing')
-AUTOMATED_ACTIONS=('browser_navigation','authenticated_extraction','messaging','application_submission')
+PERMISSION_KEYS=('public_reading','official_api','feed_read','browser_navigation','authenticated_extraction','messaging','application_submission','manual_browser_access','human_supplied_lead_processing')
+AUTOMATED_ACTIONS=('official_api','feed_read','browser_navigation','authenticated_extraction','messaging','application_submission')
 REDACTED='[REDACTED]'
 NOT_COLLECTED='[NOT_COLLECTED]'
 _SECRET_RE=re.compile(r"(?i)(?:\b|_)(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization|auth|credential[s]?|key)\s*([:=])\s*(\"[^\"]*\"|'[^']*'|[^\s,;&]+)")
 _BEARER_RE=re.compile(r'(?i)\b(bearer|basic)\s+[a-z0-9._~+/=-]{8,}')
+_URL_USERINFO_RE=re.compile(r'(?i)(https?://)[^\s/@]+@')
+_SENSITIVE_URL_KEYS=('token','secret','password','passwd','pwd','key','credential','auth','signature','sig','session','cookie','code')
+_FOUNDER_AUTH=ContextVar('founder_authenticated',default=False)
+
+
+@dataclass(frozen=True)
+class AccessDecision:
+    allowed: bool
+    reason_code: str
+    policy_version: str | None = None
+    expires_at: str | None = None
+    permitted_scope: tuple[str, ...] = ()
+
+
+class PolicyPort(Protocol):
+    def authorize(self, *, source_id: str, action: str, target_url: str) -> AccessDecision: ...
+
+
+class CorePolicyPort:
+    def authorize(self, *, source_id: str, action: str, target_url: str) -> AccessDecision:
+        return policy_check(source_id,action,target_url)
+
+
+@contextmanager
+def founder_session(token):
+    configured=os.getenv('ACQ_ADMIN_TOKEN')
+    if not configured or len(configured)<16 or not token or not hmac.compare_digest(str(token),configured):
+        raise ValueError('founder authentication required')
+    mark=_FOUNDER_AUTH.set(True)
+    try:yield
+    finally:_FOUNDER_AUTH.reset(mark)
+
+
+def require_founder():
+    if not _FOUNDER_AUTH.get():raise ValueError('founder authentication required')
 
 
 def now():
@@ -86,11 +125,39 @@ def dumps(value):
 
 def normalize_url(url):
     s = urlsplit(url.strip())
-    if s.scheme not in {'https','http'} or not s.netloc:
+    if s.scheme not in {'https','http'} or not s.netloc or s.username or s.password or not s.hostname:
         raise ValueError('Source URL must be an HTTP(S) URL')
     path = s.path.rstrip('/') or '/'
-    keep = [(k,v) for k,v in parse_qsl(s.query, keep_blank_values=True) if not k.lower().startswith(('utm_','fbclid','gclid'))]
+    keep = [(k,v) for k,v in parse_qsl(s.query, keep_blank_values=True)
+            if not k.lower().startswith(('utm_','fbclid','gclid')) and not _sensitive_url_key(k)]
     return urlunsplit((s.scheme.lower(),s.netloc.lower(),path,urlencode(sorted(keep)),''))
+
+
+def _sensitive_url_key(key):
+    return any(word in key.lower() for word in _SENSITIVE_URL_KEYS)
+
+
+def _redact(text):
+    """Redact common credential shapes; avoid putting arbitrary private text in audit payloads."""
+    t=str(text or '')
+    t=_URL_USERINFO_RE.sub(lambda m:m.group(1)+REDACTED+'@',t)
+    t=_BEARER_RE.sub(lambda m:m.group(1)+' '+REDACTED,t)
+    return _SECRET_RE.sub(lambda m:m.group(1)+m.group(2)+REDACTED,t)
+
+
+def redact(value):
+    if isinstance(value,str):return _redact(value)
+    if isinstance(value,dict):
+        return {str(k):(REDACTED if _sensitive_field_key(k) else redact(v)) for k,v in value.items()}
+    if isinstance(value,(list,tuple)):return [redact(v) for v in value]
+    return value
+
+
+def _sensitive_field_key(key):
+    key=str(key).lower().replace('-','_')
+    return key in {'password','passwd','pwd','secret','token','api_key','access_key','secret_key',
+                   'authorization','auth','credential','credentials','cookie','cookies','session_cookie',
+                   'mfa_code','otp','client_secret'} or key.endswith(('_token','_password','_secret'))
 
 
 def classify(text):
@@ -214,10 +281,36 @@ def init_db():
             reviewed_ts TEXT DEFAULT '',
             review_expires_ts TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS source_rate_usage (
+            source_id TEXT NOT NULL, hour_start TEXT NOT NULL, used INTEGER NOT NULL,
+            PRIMARY KEY(source_id,hour_start)
+        );
+        CREATE TABLE IF NOT EXISTS customer_entities (
+            id TEXT PRIMARY KEY, canonical_key TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL,
+            independent_verified INTEGER NOT NULL DEFAULT 0, evidence_ref TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS commercial_events (
+            id TEXT PRIMARY KEY, lead_id TEXT NOT NULL REFERENCES leads(id),
+            customer_id TEXT REFERENCES customer_entities(id), event_type TEXT NOT NULL,
+            evidence_ref TEXT NOT NULL, amount REAL, currency TEXT, created_at TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(status);
         CREATE INDEX IF NOT EXISTS idx_events_target ON events(target_type,target_id);
         CREATE INDEX IF NOT EXISTS idx_sources_lifecycle_state ON sources_lifecycle(lifecycle_state);
+        CREATE INDEX IF NOT EXISTS idx_commercial_lead ON commercial_events(lead_id,event_type);
         ''')
+        columns={r['name'] for r in c.execute('PRAGMA table_info(source_access_policy)')}
+        for name,ddl in {
+            'feed_read':'INTEGER DEFAULT 0',
+            'policy_version':'INTEGER NOT NULL DEFAULT 0',
+            'allowed_paths':"TEXT NOT NULL DEFAULT '[\"/\"]'",
+            'account_state':"TEXT NOT NULL DEFAULT 'UNRESTRICTED'",
+            'rate_limit_per_hour':'INTEGER NOT NULL DEFAULT 60',
+        }.items():
+            if name not in columns:c.execute(f'ALTER TABLE source_access_policy ADD COLUMN {name} {ddl}')
+        lead_columns={r['name'] for r in c.execute('PRAGMA table_info(leads)')}
+        if 'customer_id' not in lead_columns:c.execute('ALTER TABLE leads ADD COLUMN customer_id TEXT REFERENCES customer_entities(id)')
     return str(DB_PATH)
 
 
@@ -238,15 +331,15 @@ def atomic():
 
 
 def _event(c, actor, action, target_type='', target_id='', payload=None, correlation_id=None):
-    payload = payload or {}
+    payload = redact(payload or {})
     tail=c.execute('SELECT hash FROM events ORDER BY seq DESC LIMIT 1').fetchone()
     prev=tail['hash'] if tail else GENESIS
-    data={'event_id':str(uuid.uuid4()),'at':now(),'actor':actor,'action':action,
-          'target_type':target_type,'target_id':target_id,'correlation_id':correlation_id or str(uuid.uuid4()),
+    data={'event_id':str(uuid.uuid4()),'at':now(),'actor':_redact(actor),'action':_redact(action),
+          'target_type':_redact(target_type),'target_id':_redact(target_id),'correlation_id':_redact(correlation_id) if correlation_id else str(uuid.uuid4()),
           'payload':payload}
     digest=hashlib.sha256((prev+'|'+dumps(data)).encode('utf-8')).hexdigest()
     c.execute('INSERT INTO events(event_id,at,actor,action,target_type,target_id,correlation_id,payload,prev_hash,hash) VALUES(?,?,?,?,?,?,?,?,?,?)',
-              (data['event_id'],data['at'],actor,action,target_type,target_id,data['correlation_id'],dumps(payload),prev,digest))
+              (data['event_id'],data['at'],data['actor'],data['action'],data['target_type'],data['target_id'],data['correlation_id'],dumps(payload),prev,digest))
     return {'prev_hash':prev,'hash':digest,**data}
 
 
@@ -281,13 +374,14 @@ def _row_dict(row):
 def add_lead(item,actor='discovery_agent', correlation_id=None):
     """Every ingestion attempt, including duplicates, is auditable."""
     url=normalize_url(item['source_url'])
-    title=(item.get('title') or '').strip()
+    title=_redact((item.get('title') or '').strip())
     if not title:raise ValueError('title required')
     demand=item.get('demand_type','EXPLICIT_PROJECT')
     if demand not in DEMAND_TYPES:raise ValueError('invalid demand_type')
     lead_id=str(uuid.uuid4())
     ts=now()
-    inp={k:item.get(k) for k in ['source','title','description','demand_type','company','currency','budget_min','budget_max']}
+    inp=redact({k:item.get(k) for k in ['source','title','description','demand_type','company','currency','budget_min','budget_max']})
+    inp['title']=title
     inp['source_url']=url
     inp['demand_type']=demand
     inp['source']=inp['source'] or 'manual'
@@ -300,7 +394,9 @@ def add_lead(item,actor='discovery_agent', correlation_id=None):
         rating=score_lead({**inp,'buyer_verified':False,'status':'DISCOVERED'})
         c.execute('''INSERT INTO leads(id,source,source_url,title,description,demand_type,company,currency,budget_min,budget_max,status,score,categories,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
               (lead_id,inp['source'],url,title,inp['description'],demand,inp['company'],inp['currency'],inp['budget_min'],inp['budget_max'],'DISCOVERED',rating['score'],dumps(rating['categories']),ts,ts))
-        _event(c,actor,'LEAD_DISCOVERED','lead',lead_id,{'lead':inp,'score':rating},correlation_id)
+        audit_lead={k:v for k,v in inp.items() if k!='description'}
+        audit_lead['description_sha256']=hashlib.sha256(inp['description'].encode('utf-8')).hexdigest()
+        _event(c,actor,'LEAD_DISCOVERED','lead',lead_id,{'lead':audit_lead,'score':rating},correlation_id)
     return {'id':lead_id,'created':True,'score':rating}
 
 
@@ -323,7 +419,9 @@ def list_leads(limit=100,status=None):
 
 def verify_lead(lead_id, verified, note, actor='founder'):
     if actor!='founder':raise ValueError('founder authorization required to verify buyer')
+    require_founder()
     if not note.strip():raise ValueError('verification note and basis required')
+    note=_redact(note)
     with atomic() as c:
         r=c.execute('SELECT * FROM leads WHERE id=?',(lead_id,)).fetchone()
         if not r:raise ValueError('lead not found')
@@ -338,21 +436,21 @@ def verify_lead(lead_id, verified, note, actor='founder'):
 def transition_lead(lead_id,new_status,actor='founder',note='',payment_reference=None):
     new_status=new_status.upper()
     if new_status not in STAGES:raise ValueError('invalid status')
+    if actor!='founder':raise ValueError('founder approval required for lead transitions')
+    require_founder()
     with atomic() as c:
         r=c.execute('SELECT * FROM leads WHERE id=?',(lead_id,)).fetchone()
         if not r:raise ValueError('lead not found')
         before=r['status']
         if new_status not in LIFECYCLE[before]:
             raise ValueError(f'invalid transition {before} -> {new_status}')
-        if new_status in {'CONTACTED','PROPOSED','NEGOTIATING','WON','LOST','REJECTED'} and actor!='founder':
-            raise ValueError('founder approval required for external actions and commercial decisions')
         if new_status in {'QUALIFIED','CONTACTED','PROPOSED','NEGOTIATING','WON'} and not r['buyer_verified']:
             raise ValueError('buyer must be verified before this stage')
-        if new_status=='WON' and not payment_reference:
-            raise ValueError('payment reference required; no clients counted without payment evidence')
+        if new_status=='WON' and not _lead_has_confirmed_payment(c,lead_id):
+            raise ValueError('confirmed independent customer, agreed scope and received payment required')
         paid_at=now() if new_status=='WON' else r['first_paid_at']
         c.execute('UPDATE leads SET status=?, first_paid_at=?,updated_at=? WHERE id=?', (new_status,paid_at,now(),lead_id))
-        _event(c,actor,'LEAD_TRANSITION','lead',lead_id,{'from':before,'to':new_status,'note':note,'payment_reference':payment_reference})
+        _event(c,actor,'LEAD_TRANSITION','lead',lead_id,{'from':before,'to':new_status,'note':_redact(note),'legacy_payment_reference':bool(payment_reference)})
     return get_lead(lead_id)
 
 
@@ -362,10 +460,14 @@ def add_memory(scope,kind,statement,source,confidence,verified=False,actor='agen
     if kind not in ('FACT','HYPOTHESIS','LESSON','RULE','DECISION'):
         raise ValueError('invalid memory kind')
     if verified and actor!='founder':raise ValueError('only founder can verify a memory')
+    if actor=='founder' or verified:require_founder()
+    scope,statement,source=(_redact(x) for x in (scope,statement,source))
     m_id=str(uuid.uuid4())
     with atomic() as c:
         c.execute('INSERT INTO memory VALUES(?,?,?,?,?,?,?,?)',(m_id,scope,kind,statement,source,confidence,int(verified),now()))
-        _event(c,actor,'MEMORY_WRITTEN','memory',m_id,{'scope':scope,'kind':kind,'statement':statement,'source':source,'confidence':confidence,'verified':verified})
+        _event(c,actor,'MEMORY_WRITTEN','memory',m_id,{'scope':scope,'kind':kind,
+            'statement_sha256':hashlib.sha256(statement.encode('utf-8')).hexdigest(),
+            'source':source,'confidence':confidence,'verified':verified})
     return m_id
 
 
@@ -380,6 +482,7 @@ def read_memory(scope=None,limit=100):
 
 
 def create_task(title,owner='founder',lead_id=None,due_at=None,actor='agent'):
+    title,owner,due_at=_redact(title),_redact(owner),_redact(due_at) if due_at else None
     task_id=str(uuid.uuid4());ts=now()
     with atomic() as c:
         c.execute('INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?)',(task_id,lead_id,title,owner,'TODO',due_at,ts,ts))
@@ -403,6 +506,7 @@ def list_tasks(limit=100):
 
 def store_artifact(lead_id,kind,content,actor='proposal_agent'):
     if not get_lead(lead_id):raise ValueError('lead not found')
+    content=_redact(content)
     aid=str(uuid.uuid4())
     with atomic() as c:
         c.execute('INSERT INTO artifacts VALUES(?,?,?,?,?)',(aid,lead_id,kind,content,now()))
@@ -429,6 +533,89 @@ def list_events(limit=100,target_id=None):
     return result
 
 
+COMMERCIAL_EVENT_TYPES=('APPLICATION_SUBMITTED','PROPOSAL_SENT','CONTACT_SENT','FOLLOWUP_SENT','REPLY_RECEIVED',
+                        'DISCOVERY_HELD','SCOPE_AGREED','PAYMENT_RECEIVED','PAYMENT_REFUNDED')
+
+
+def register_customer_entity(canonical_key,display_name,evidence_ref,independent_verified=False):
+    """Founder-attested organization identity. One canonical key represents one customer."""
+    require_founder()
+    key=_redact(canonical_key.strip().lower())
+    if not key or len(key)<3 or not display_name.strip() or not evidence_ref.strip():
+        raise ValueError('customer key, name and identity evidence required')
+    with atomic() as c:
+        existing=c.execute('SELECT id,independent_verified FROM customer_entities WHERE canonical_key=?',(key,)).fetchone()
+        if existing:
+            if independent_verified and not existing['independent_verified']:
+                c.execute('UPDATE customer_entities SET independent_verified=1,evidence_ref=? WHERE id=?',
+                          (_redact(evidence_ref),existing['id']))
+                _event(c,'founder','CUSTOMER_VERIFIED','customer',existing['id'],{'evidence_ref':evidence_ref})
+            return existing['id']
+        cid=str(uuid.uuid4())
+        c.execute('INSERT INTO customer_entities VALUES(?,?,?,?,?,?)',
+                  (cid,key,_redact(display_name),int(independent_verified),_redact(evidence_ref),now()))
+        _event(c,'founder','CUSTOMER_REGISTERED','customer',cid,
+               {'canonical_key':key,'independent_verified':bool(independent_verified),'evidence_ref':evidence_ref})
+    return cid
+
+
+def link_lead_customer(lead_id,customer_id):
+    require_founder()
+    with atomic() as c:
+        if not c.execute('SELECT 1 FROM customer_entities WHERE id=?',(customer_id,)).fetchone():
+            raise ValueError('customer not found')
+        row=c.execute('SELECT customer_id FROM leads WHERE id=?',(lead_id,)).fetchone()
+        if not row:raise ValueError('lead not found')
+        if row['customer_id'] and row['customer_id']!=customer_id:
+            raise ValueError('lead customer already linked; investigate identity before changing')
+        c.execute('UPDATE leads SET customer_id=?,updated_at=? WHERE id=?',(customer_id,now(),lead_id))
+        _event(c,'founder','LEAD_CUSTOMER_LINKED','lead',lead_id,{'customer_id':customer_id})
+    return get_lead(lead_id)
+
+
+def _lead_has_confirmed_payment(c,lead_id):
+    return bool(c.execute('''SELECT 1 FROM leads l JOIN customer_entities ce ON ce.id=l.customer_id
+        WHERE l.id=? AND ce.independent_verified=1
+        AND EXISTS (SELECT 1 FROM commercial_events e WHERE e.lead_id=l.id AND e.event_type='SCOPE_AGREED')
+        AND COALESCE((SELECT SUM(CASE WHEN e.event_type='PAYMENT_RECEIVED' THEN e.amount
+                                      WHEN e.event_type='PAYMENT_REFUNDED' THEN -e.amount ELSE 0 END)
+                      FROM commercial_events e WHERE e.lead_id=l.id),0)>0''',(lead_id,)).fetchone())
+
+
+def record_commercial_event(lead_id,event_type,evidence_ref,amount=None,currency=None):
+    """Record an action the founder already took; this function never contacts a buyer."""
+    require_founder()
+    event_type=str(event_type).upper()
+    if event_type not in COMMERCIAL_EVENT_TYPES:raise ValueError('unsupported commercial event')
+    if not evidence_ref or not evidence_ref.strip():raise ValueError('founder evidence reference required')
+    if event_type in ('PAYMENT_RECEIVED','PAYMENT_REFUNDED') and (amount is None or amount<=0 or not currency or not re.fullmatch(r'[A-Z]{3}',currency)):
+        raise ValueError('positive amount and ISO currency required')
+    with atomic() as c:
+        lead=c.execute('SELECT customer_id FROM leads WHERE id=?',(lead_id,)).fetchone()
+        if not lead:raise ValueError('lead not found')
+        customer_id=lead['customer_id']
+        if event_type in ('SCOPE_AGREED','PAYMENT_RECEIVED','PAYMENT_REFUNDED'):
+            if not customer_id:raise ValueError('linked customer required for scope and payment')
+            customer=c.execute('SELECT independent_verified FROM customer_entities WHERE id=?',(customer_id,)).fetchone()
+            if not customer or not customer['independent_verified']:
+                raise ValueError('independent customer verification required')
+        if event_type=='PAYMENT_RECEIVED' and not c.execute(
+            "SELECT 1 FROM commercial_events WHERE lead_id=? AND event_type='SCOPE_AGREED'",(lead_id,)).fetchone():
+            raise ValueError('agreed scope required before receipt')
+        if event_type in ('PAYMENT_RECEIVED','PAYMENT_REFUNDED'):
+            currencies={r['currency'] for r in c.execute("SELECT currency FROM commercial_events WHERE lead_id=? AND event_type IN ('PAYMENT_RECEIVED','PAYMENT_REFUNDED')",(lead_id,))}
+            if currencies and currency not in currencies:raise ValueError('payment currency must match existing deal receipts')
+        if event_type=='PAYMENT_REFUNDED':
+            net=c.execute("SELECT COALESCE(SUM(CASE WHEN event_type='PAYMENT_RECEIVED' THEN amount WHEN event_type='PAYMENT_REFUNDED' THEN -amount ELSE 0 END),0) FROM commercial_events WHERE lead_id=?",(lead_id,)).fetchone()[0]
+            if amount>net:raise ValueError('refund exceeds received net funds')
+        event_id=str(uuid.uuid4())
+        c.execute('INSERT INTO commercial_events VALUES(?,?,?,?,?,?,?,?)',
+                  (event_id,lead_id,customer_id,event_type,_redact(evidence_ref),amount,_redact(currency) if currency else None,now()))
+        _event(c,'founder',event_type,'lead',lead_id,{'commercial_event_id':event_id,'customer_id':customer_id,
+            'evidence_ref':evidence_ref,'amount':amount,'currency':currency})
+    return {'id':event_id,'lead_id':lead_id,'event_type':event_type,'customer_id':customer_id}
+
+
 def summary():
     init_db()
     with _con() as c:
@@ -436,18 +623,28 @@ def summary():
         n=c.execute('SELECT COUNT(*) n FROM events').fetchone()['n']
         mem=c.execute('SELECT COUNT(*) n FROM memory').fetchone()['n']
         tasks=c.execute("SELECT COUNT(*) n FROM tasks WHERE status='TODO'").fetchone()['n']
-        num=c.execute('SELECT COUNT(*) n FROM leads WHERE first_paid_at IS NOT NULL').fetchone()['n']
+        num=c.execute('''SELECT COUNT(DISTINCT l.customer_id) n FROM leads l
+          JOIN customer_entities ce ON ce.id=l.customer_id WHERE ce.independent_verified=1
+          AND EXISTS (SELECT 1 FROM commercial_events e WHERE e.lead_id=l.id AND e.event_type='SCOPE_AGREED')
+          AND COALESCE((SELECT SUM(CASE WHEN e.event_type='PAYMENT_RECEIVED' THEN e.amount
+                                        WHEN e.event_type='PAYMENT_REFUNDED' THEN -e.amount ELSE 0 END)
+                        FROM commercial_events e WHERE e.lead_id=l.id),0)>0''').fetchone()['n']
+        signed=c.execute("SELECT COUNT(DISTINCT e.customer_id) n FROM commercial_events e JOIN customer_entities ce ON ce.id=e.customer_id WHERE e.event_type='SCOPE_AGREED' AND ce.independent_verified=1").fetchone()['n']
+        commercial={r['event_type']:r['n'] for r in c.execute('SELECT event_type,COUNT(DISTINCT lead_id) n FROM commercial_events GROUP BY event_type')}
+        actual_contacts=c.execute("SELECT COUNT(DISTINCT lead_id) n FROM commercial_events WHERE event_type IN ('APPLICATION_SUBMITTED','PROPOSAL_SENT','CONTACT_SENT','FOLLOWUP_SENT')").fetchone()['n']
+        proposals_sent=c.execute("SELECT COUNT(DISTINCT lead_id) n FROM commercial_events WHERE event_type IN ('APPLICATION_SUBMITTED','PROPOSAL_SENT')").fetchone()['n']
         cats={}
         for r in c.execute('SELECT categories FROM leads'):
             for category in json.loads(r['categories']):cats[category]=cats.get(category,0)+1
-    return {'leads':sum(statuses.values()),'paying_clients':num,'target_clients':3,'stages':statuses,
+    return {'leads':sum(statuses.values()),'paying_clients':num,'signed_clients':signed,'target_clients':3,'stages':statuses,
+            'actual_contacts':actual_contacts,'proposals_sent':proposals_sent,'commercial_events_by_type':commercial,
             'category_signals':cats,'events':n,'memory_items':mem,'open_tasks':tasks}
 
 
 def checkpoint(day):
     if day not in (30,60,90):raise ValueError('supported checkpoints: 30,60,90')
-    s=summary(); st=s['stages'];total=s['leads'];contacted=sum(st.get(k,0) for k in ('CONTACTED','REPLIED','DISCOVERY','PROPOSED','NEGOTIATING','WON','LOST'))
-    proposed=sum(st.get(k,0) for k in ('PROPOSED','NEGOTIATING','WON','LOST'))
+    s=summary(); total=s['leads'];contacted=s['actual_contacts']
+    proposed=s['proposals_sent']
     won=s['paying_clients']
     problems=[]
     if total<10:problems.append('Too little discovery data. Source access and discovery may be the bottleneck.')
@@ -471,23 +668,25 @@ def search_queries():
     return {'EXPLICIT_PROJECT':explicit,'POTENTIAL_ACCOUNT':accounts}
 
 ACTIVITY_TYPES = ('RESEARCH_NOTE','SOURCE_CHECK','PROFILE_UPDATED','OUTREACH_DRAFT_REVIEWED',
-                  'MESSAGE_SENT_MANUALLY','MEETING_HELD','BUYER_OBJECTION','PROPOSAL_REVIEWED',
+                  'MESSAGE_SENT_MANUALLY','APPLICATION_SUBMITTED','PROPOSAL_SENT','FOLLOWUP_SENT',
+                  'REPLY_RECEIVED','MEETING_HELD','BUYER_OBJECTION','PROPOSAL_REVIEWED',
                   'PRICE_DECISION','MILESTONE_UPDATE','PAYMENT_NOTE','EXPERIMENT_DECISION')
 
 def manual_activity(action,summary_text,lead_id=None,evidence=None,actor='founder'):
     if action not in ACTIVITY_TYPES:raise ValueError('unsupported activity action')
     if actor!='founder':raise ValueError('manual business activity must be reported by founder')
+    require_founder()
+    mapped={'MESSAGE_SENT_MANUALLY':'CONTACT_SENT','APPLICATION_SUBMITTED':'APPLICATION_SUBMITTED',
+            'PROPOSAL_SENT':'PROPOSAL_SENT','FOLLOWUP_SENT':'FOLLOWUP_SENT',
+            'REPLY_RECEIVED':'REPLY_RECEIVED','MEETING_HELD':'DISCOVERY_HELD'}
+    if action in mapped and not lead_id:raise ValueError('lead_id required for commercial activity')
     if lead_id and not get_lead(lead_id):raise ValueError('lead not found')
     if not summary_text.strip():raise ValueError('activity requires description')
-    return record_event(actor,'BUSINESS_ACTIVITY',{'type':action,'summary':summary_text[:2000],
-                'evidence':evidence},'lead' if lead_id else 'business',lead_id or 'global')
-
-
-def _redact(text):
-    """Credential material is never persisted or logged; values become [REDACTED]."""
-    t=str(text or '')
-    t=_BEARER_RE.sub(lambda m:m.group(1)+' '+REDACTED,t)
-    return _SECRET_RE.sub(lambda m:m.group(1)+m.group(2)+REDACTED,t)
+    event=record_event(actor,'BUSINESS_ACTIVITY',{'type':action,'summary':_redact(summary_text[:2000]),
+                'evidence':_redact(evidence)},'lead' if lead_id else 'business',lead_id or 'global')
+    if lead_id and action in mapped:
+        record_commercial_event(lead_id,mapped[action],evidence or summary_text)
+    return event
 
 
 def _flag(value):
@@ -501,6 +700,7 @@ def register_source(source_id,domain,name,category,actor='system'):
     if not name:raise ValueError('name required')
     if not re.fullmatch(r'[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+',domain):raise ValueError('domain must be a bare hostname like example.com')
     if category not in SOURCE_CATEGORIES:raise ValueError('invalid source category')
+    if actor=='founder':require_founder()
     ts=now()
     with atomic() as c:
         if c.execute('SELECT 1 FROM sources_lifecycle WHERE source_id=?',(source_id,)).fetchone():raise ValueError('source already registered')
@@ -521,8 +721,10 @@ def transition_source(source_id,new_state,actor='system',note=''):
         before=r['lifecycle_state']
         if new_state==before:error=f'source already in state {new_state}'
         elif new_state not in SOURCE_LIFECYCLE_TRANSITIONS.get(before,set()):error=f'invalid source transition {before} -> {new_state}'
-        elif before=='AWAITING_FOUNDER' and actor!='founder':error='founder authorization required for source onboarding decision'
+        elif (before=='AWAITING_FOUNDER' or new_state in {'ONBOARDING','PILOT_READY','PILOT_RUNNING','ACTIVE','MANUAL_ONLY'}) and actor!='founder':
+            error='founder authorization required for source onboarding decision'
         else:
+            if actor=='founder':require_founder()
             c.execute('UPDATE sources_lifecycle SET lifecycle_state=?,updated_ts=? WHERE source_id=?',(new_state,now(),source_id))
             _event(c,actor,'SOURCE_TRANSITION','source',source_id,{'from':before,'to':new_state,'note':note})
             if before=='AWAITING_FOUNDER':
@@ -534,31 +736,41 @@ def transition_source(source_id,new_state,actor='system',note=''):
 
 
 def update_source_policy(source_id,policy_state,permissions_dict=None,evidence='',actor='system'):
-    """Update access policy; evidence is redacted before storage and audit. Only founder may set CONFIRMED."""
+    """Only an authenticated founder can alter policy or permissions."""
+    if actor!='founder' or not _FOUNDER_AUTH.get():
+        record_event('policy_guard','ACTION_DENIED',{'reason_code':'FOUNDER_AUTH_REQUIRED','attempted_policy_state':policy_state},'source',source_id)
+        raise ValueError('founder authorization required to update source policy')
     policy_state=str(policy_state).strip().upper()
     if policy_state not in ACCESS_POLICY_STATES:raise ValueError('invalid policy state')
     perms=dict(permissions_dict or {})
-    unknown=set(perms)-set(PERMISSION_KEYS)-{'rate_limit_notes'}
+    unknown=set(perms)-set(PERMISSION_KEYS)-{'rate_limit_notes','allowed_paths','account_state','rate_limit_per_hour'}
     if unknown:raise ValueError('unknown permission keys: '+','.join(sorted(unknown)))
     evidence=_redact(evidence);rate=_redact(perms.get('rate_limit_notes',''))
-    error=None
+    paths=perms.get('allowed_paths')
+    if paths is not None and (not isinstance(paths,(list,tuple)) or not paths or any(not isinstance(p,str) or not p.startswith('/') or p.startswith('//') or _redact(p)!=p for p in paths)):
+        raise ValueError('allowed_paths must be nonempty URL path prefixes')
+    account_state=str(perms['account_state']).upper() if 'account_state' in perms else None
+    if account_state is not None and account_state not in ('UNRESTRICTED','RESTRICTED','SUSPENDED'):
+        raise ValueError('invalid account_state')
+    hourly=int(perms['rate_limit_per_hour']) if 'rate_limit_per_hour' in perms else None
+    if hourly is not None and not 1<=hourly<=3600:raise ValueError('rate_limit_per_hour must be 1..3600')
+    if policy_state=='CONFIRMED' and not evidence.strip():raise ValueError('policy evidence required')
     with atomic() as c:
         if not c.execute('SELECT 1 FROM sources_lifecycle WHERE source_id=?',(source_id,)).fetchone():raise ValueError('source not found')
         cur=c.execute('SELECT * FROM source_access_policy WHERE source_id=?',(source_id,)).fetchone()
         if not cur:raise ValueError('source policy not found')
-        if policy_state=='CONFIRMED' and actor!='founder':error='founder authorization required to confirm source access policy'
-        else:
-            flags={k:_flag(perms.get(k,cur[k])) for k in PERMISSION_KEYS}
-            ts=now()
-            reviewed=ts if policy_state=='CONFIRMED' else (cur['reviewed_ts'] or '')
-            expires=(datetime.now(timezone.utc)+timedelta(days=90)).isoformat(timespec='seconds') if policy_state=='CONFIRMED' else (cur['review_expires_ts'] or '')
-            c.execute('UPDATE source_access_policy SET policy_state=?,public_reading=?,official_api=?,browser_navigation=?,authenticated_extraction=?,messaging=?,application_submission=?,manual_browser_access=?,human_supplied_lead_processing=?,rate_limit_notes=?,evidence=?,reviewed_ts=?,review_expires_ts=? WHERE source_id=?',
-                      (policy_state,)+tuple(flags[k] for k in PERMISSION_KEYS)+(rate,evidence,reviewed,expires,source_id))
-            c.execute('UPDATE sources_lifecycle SET updated_ts=? WHERE source_id=?',(ts,source_id))
-            _event(c,actor,'SOURCE_POLICY_UPDATED','source',source_id,{'policy_state':policy_state,'permissions':{k:bool(flags[k]) for k in PERMISSION_KEYS},'rate_limit_notes':rate,'evidence':evidence,'reviewed_ts':reviewed,'review_expires_ts':expires})
-    if error:
-        record_event(actor,'ACTION_DENIED',{'reason':error,'attempted_policy_state':policy_state},'source',source_id)
-        raise ValueError(error)
+        paths=paths if paths is not None else json.loads(cur['allowed_paths'])
+        account_state=account_state or cur['account_state']
+        hourly=hourly or cur['rate_limit_per_hour']
+        flags={k:_flag(perms.get(k,cur[k])) for k in PERMISSION_KEYS}
+        ts=now()
+        reviewed=ts if policy_state=='CONFIRMED' else (cur['reviewed_ts'] or '')
+        expires=(datetime.now(timezone.utc)+timedelta(days=90)).isoformat(timespec='seconds') if policy_state=='CONFIRMED' else (cur['review_expires_ts'] or '')
+        version=cur['policy_version']+1
+        c.execute('UPDATE source_access_policy SET policy_state=?,public_reading=?,official_api=?,feed_read=?,browser_navigation=?,authenticated_extraction=?,messaging=?,application_submission=?,manual_browser_access=?,human_supplied_lead_processing=?,rate_limit_notes=?,evidence=?,reviewed_ts=?,review_expires_ts=?,policy_version=?,allowed_paths=?,account_state=?,rate_limit_per_hour=? WHERE source_id=?',
+                  (policy_state,)+tuple(flags[k] for k in PERMISSION_KEYS)+(rate,evidence,reviewed,expires,version,dumps(paths),account_state,hourly,source_id))
+        c.execute('UPDATE sources_lifecycle SET updated_ts=? WHERE source_id=?',(ts,source_id))
+        _event(c,actor,'SOURCE_POLICY_UPDATED','source',source_id,{'policy_state':policy_state,'policy_version':version,'permissions':{k:bool(flags[k]) for k in PERMISSION_KEYS},'allowed_paths':paths,'account_state':account_state,'rate_limit_per_hour':hourly,'evidence':evidence,'reviewed_ts':reviewed,'review_expires_ts':expires})
     return get_source(source_id)
 
 
@@ -577,6 +789,10 @@ def get_source(source_id):
         out['evidence']=p['evidence'] or NOT_COLLECTED
         out['reviewed_ts']=p['reviewed_ts'] or NOT_COLLECTED
         out['review_expires_ts']=p['review_expires_ts'] or NOT_COLLECTED
+        out['policy_version']=p['policy_version']
+        out['allowed_paths']=json.loads(p['allowed_paths'])
+        out['account_state']=p['account_state']
+        out['rate_limit_per_hour']=p['rate_limit_per_hour']
     else:
         out['policy_state']='UNKNOWN'
     return out
@@ -592,26 +808,58 @@ def list_sources(lifecycle_state=None):
     return [dict(x) for x in rows]
 
 
-def is_automated_action_allowed(source_id,action,actor='system'):
-    """Single enforcement gate for automated source access; every denial is audit-logged as ACTION_DENIED."""
-    if action not in AUTOMATED_ACTIONS:raise ValueError('unsupported automated action')
-    init_db()
-    with _con() as c:
-        s=c.execute('SELECT lifecycle_state FROM sources_lifecycle WHERE source_id=?',(source_id,)).fetchone()
-        p=c.execute('SELECT * FROM source_access_policy WHERE source_id=?',(source_id,)).fetchone()
-    if not s:raise ValueError('source not found')
-    if not p:raise ValueError('source policy not found')
-    state=p['policy_state']
-    if s['lifecycle_state']=='MANUAL_ONLY':
-        record_event(actor,'ACTION_DENIED',{'action':action,'reason':'source is MANUAL_ONLY; all automated actions prohibited','lifecycle_state':'MANUAL_ONLY','policy_state':state},'source',source_id)
-        return False
-    if state!='CONFIRMED':
-        record_event(actor,'ACTION_DENIED',{'action':action,'reason':'source access policy is not CONFIRMED','lifecycle_state':s['lifecycle_state'],'policy_state':state},'source',source_id)
-        return False
-    if not p[action]:
-        record_event(actor,'ACTION_DENIED',{'action':action,'reason':'action not granted by confirmed policy','lifecycle_state':s['lifecycle_state'],'policy_state':state},'source',source_id)
-        return False
-    return True
+def policy_check(source_id,action,target_url):
+    """Default-deny, audited authorization for one impending network operation."""
+    try:parsed=urlsplit(str(target_url))
+    except ValueError:parsed=urlsplit('')
+    safe_url=_redact(urlunsplit((parsed.scheme,parsed.netloc,parsed.path,'','')))
+    reason=None
+    with atomic() as c:
+        source=c.execute('SELECT * FROM sources_lifecycle WHERE source_id=?',(source_id,)).fetchone()
+        policy=c.execute('SELECT * FROM source_access_policy WHERE source_id=?',(source_id,)).fetchone()
+        if action not in AUTOMATED_ACTIONS:reason='UNKNOWN_ACTION'
+        elif action in ('messaging','application_submission'):reason='OUTBOUND_PROHIBITED'
+        elif not source or not policy:reason='UNKNOWN_SOURCE'
+        elif source['lifecycle_state'] not in ('ACTIVE','PILOT_RUNNING'):reason='INACTIVE_SOURCE'
+        elif policy['policy_state']!='CONFIRMED' or not policy['evidence'] or policy['policy_version']<1:reason='POLICY_UNCONFIRMED'
+        elif not policy['review_expires_ts']:reason='POLICY_EXPIRED'
+        else:
+            try:expired=datetime.fromisoformat(policy['review_expires_ts'])<=datetime.now(timezone.utc)
+            except (ValueError,TypeError):expired=True
+            if expired:reason='POLICY_EXPIRED'
+        if not reason and policy['account_state']!='UNRESTRICTED':reason='ACCOUNT_RESTRICTED'
+        if not reason and not policy[action]:reason='ACTION_NOT_ALLOWED'
+        if not reason:
+            try:
+                paths=json.loads(policy['allowed_paths'])
+                path=unquote(parsed.path or '/')
+                valid_path=path==unquote(path) and not ('\\' in path or '//' in path or any(seg in ('.','..') for seg in path.split('/')))
+                valid_path=valid_path and any(prefix=='/' or path==prefix.rstrip('/') or path.startswith(prefix.rstrip('/')+'/') for prefix in paths)
+                valid_host=parsed.scheme=='https' and parsed.hostname==source['domain'] and not parsed.username and not parsed.password and parsed.port in (None,443)
+                valid_query=not any(_sensitive_url_key(k) for k,_ in parse_qsl(parsed.query,keep_blank_values=True))
+                if not (valid_path and valid_host and valid_query):reason='TARGET_OUT_OF_SCOPE'
+            except (ValueError,TypeError,KeyError):reason='TARGET_OUT_OF_SCOPE'
+        if not reason:
+            hour=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:00:00Z')
+            used=c.execute('SELECT used FROM source_rate_usage WHERE source_id=? AND hour_start=?',(source_id,hour)).fetchone()
+            if used and used['used']>=policy['rate_limit_per_hour']:reason='RATE_LIMITED'
+            else:
+                c.execute('INSERT INTO source_rate_usage(source_id,hour_start,used) VALUES(?,?,1) ON CONFLICT(source_id,hour_start) DO UPDATE SET used=used+1',(source_id,hour))
+        allowed=reason is None
+        version=str(policy['policy_version']) if policy else None
+        expiry=policy['review_expires_ts'] if policy else None
+        scope=tuple('https://'+source['domain']+p for p in json.loads(policy['allowed_paths'])) if allowed else ()
+        decision=AccessDecision(allowed,reason or 'ALLOWED',version,expiry,scope)
+        _event(c,'policy_guard','POLICY_CHECKED' if allowed else 'ACTION_DENIED','source',source_id,
+               {'action':action,'target_url':safe_url,'reason_code':decision.reason_code,'policy_version':version})
+    return decision
+
+
+def is_automated_action_allowed(source_id,action,actor='system',target_url=None):
+    """Compatibility wrapper; new integrations use CorePolicyPort.authorize."""
+    source=get_source(source_id)
+    target=target_url or ('https://'+source['domain']+'/' if source else 'https://invalid.example/')
+    return policy_check(source_id,action,target).allowed
 
 
 def ingest_manual_lead(source_id,lead_data,actor='founder'):
@@ -619,6 +867,7 @@ def ingest_manual_lead(source_id,lead_data,actor='founder'):
     if actor!='founder':
         record_event(actor,'ACTION_DENIED',{'reason':'manual lead intake requires founder','source_id':source_id},'source',source_id)
         raise ValueError('manual lead intake requires founder')
+    require_founder()
     src=get_source(source_id)
     if not src:raise ValueError('source not found')
     if src['lifecycle_state']!='MANUAL_ONLY':
