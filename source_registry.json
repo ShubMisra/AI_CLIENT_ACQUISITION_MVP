@@ -1,0 +1,47 @@
+{
+  "policy": "Do not assume public visibility authorizes automated collection. Verify current source terms and use official APIs, approved RSS/exports, search index result snippets, or founder-supplied URLs. All new sources disabled until configured and reviewed.",
+  "source_categories": {
+    "explicit_marketplace_demand": [
+      {"name":"Freelancer.com","url":"https://www.freelancer.com/","access":"official_api_oauth","priority":"P0","status":"documented","note":"Official Python SDK supports search_projects; credentials and applicable permissions required"},
+      {"name":"Upwork","url":"https://www.upwork.com/","access":"approved_api_or_on_platform_alerts","priority":"P0","status":"documented","note":"No RSS; no unauthorized scraping; no automated account activity without permission"},
+      {"name":"Contra","url":"https://contra.com/","access":"manual_or_approved_adapter","priority":"P1","status":"requires_review"},
+      {"name":"Fiverr","url":"https://www.fiverr.com/","access":"manual_or_permitted_notifications","priority":"P1","status":"documented","note":"No automated scraping, mass messaging, or unauthorized bots"},
+      {"name":"Guru","url":"https://www.guru.com/","access":"manual_or_approved_adapter","priority":"P1","status":"requires_review"},
+      {"name":"PeoplePerHour","url":"https://www.peopleperhour.com/","access":"manual_or_approved_adapter","priority":"P1","status":"requires_review"},
+      {"name":"Workana","url":"https://www.workana.com/","access":"manual_or_approved_adapter","priority":"P2","status":"requires_review"},
+      {"name":"Truelancer","url":"https://www.truelancer.com/","access":"manual_or_approved_adapter","priority":"P2","status":"requires_review"},
+      {"name":"Braintrust","url":"https://www.usebraintrust.com/","access":"manual_or_approved_adapter","priority":"P2","status":"requires_review"},
+      {"name":"Toptal","url":"https://www.toptal.com/","access":"manual_screened_application","priority":"P2","status":"requires_review"},
+      {"name":"Malt","url":"https://www.malt.com/","access":"manual_or_approved_adapter","priority":"P2","status":"requires_review"}
+    ],
+    "rfp_and_procurement": [
+      {"name":"India CPPP","url":"https://eprocure.gov.in/","access":"official_publication_or_approved_export","priority":"P2","status":"requires_review"},
+      {"name":"GeM India","url":"https://gem.gov.in/","access":"official_portal_and_eligibility","priority":"P2","status":"requires_review"},
+      {"name":"SAM.gov","url":"https://sam.gov/","access":"documented_official_api_if_eligible","priority":"P2","status":"requires_review"},
+      {"name":"TED Europa","url":"https://ted.europa.eu/","access":"documented_official_api_if_allowed","priority":"P2","status":"requires_review"},
+      {"name":"UNGM","url":"https://www.ungm.org/","access":"official_export_or_manual","priority":"P2","status":"requires_review"},
+      {"name":"World Bank procurement","url":"https://www.worldbank.org/en/projects-operations/procurement","access":"approved_feed_or_manual","priority":"P2","status":"requires_review"}
+    ],
+    "agency_partners": [
+      {"name":"Clutch","url":"https://clutch.co/","access":"search_index_and_manual_qualification","priority":"P0","status":"requires_review"},
+      {"name":"GoodFirms","url":"https://www.goodfirms.co/","access":"search_index_and_manual_qualification","priority":"P0","status":"requires_review"},
+      {"name":"DesignRush","url":"https://www.designrush.com/","access":"search_index_and_manual_qualification","priority":"P1","status":"requires_review"},
+      {"name":"TopDevelopers","url":"https://www.topdevelopers.co/","access":"search_index_and_manual_qualification","priority":"P2","status":"requires_review"},
+      {"name":"Google Maps company listings","url":"https://www.google.com/maps","access":"manual_business_lookup_or_licensed_api","priority":"P1","status":"requires_review"}
+    ],
+    "startup_and_direct_accounts": [
+      {"name":"Y Combinator directory","url":"https://www.ycombinator.com/companies","access":"search_index_or_manual","priority":"P0","status":"requires_review"},
+      {"name":"Wellfound","url":"https://wellfound.com/","access":"manual_or_approved_adapter","priority":"P1","status":"requires_review"},
+      {"name":"Product Hunt","url":"https://www.producthunt.com/","access":"documented_api_if_access_granted","priority":"P1","status":"requires_review"},
+      {"name":"Techstars portfolio","url":"https://www.techstars.com/portfolio","access":"search_index_or_manual","priority":"P1","status":"requires_review"},
+      {"name":"Hacker News","url":"https://news.ycombinator.com/","access":"approved_public_api","priority":"P1","status":"requires_review"},
+      {"name":"Indie Hackers","url":"https://www.indiehackers.com/","access":"manual_or_approved_adapter","priority":"P2","status":"requires_review"},
+      {"name":"LinkedIn","url":"https://www.linkedin.com/","access":"human_or_approved_integration_only","priority":"P0","status":"documented","note":"Unauthorized bots, scraping and automation prohibited"}
+    ],
+    "discovery_infrastructure": [
+      {"name":"Brave Search API","url":"https://brave.com/search/api/","access":"api_key_licensed_search","priority":"P0","status":"documented"},
+      {"name":"Authorized RSS feeds","url":"https://www.rssboard.org/rss-specification","access":"permission_confirmed_feed","priority":"P1","status":"depends_on_source"},
+      {"name":"Founder-provided URL / offline referral","url":"https://example.com/","access":"manual_record","priority":"P0","status":"ready","note":"Example placeholder URL is not a real lead"}
+    ]
+  }
+}

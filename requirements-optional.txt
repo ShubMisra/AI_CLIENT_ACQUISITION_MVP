@@ -1,0 +1,4 @@
+# Only for authorized Freelancer.com API access (after reviewing platform policies)
+freelancersdk
+# Only for local development tests
+pytest>=8
