@@ -26,7 +26,7 @@ No Kilo-owned file changed. The canonical lead remains `DISCOVERED` with `buyer_
 - `.\.venv\Scripts\python.exe -m pytest -q` from the integration worktree: **58 passed**, one upstream Starlette/httpx deprecation warning. This worktree has its own Python 3.11 virtual environment, installed from `requirements.txt` plus pytest.
 - `.\.venv\Scripts\python.exe -m compileall -q acqsys tests scripts` and `git diff --check`: passed.
 - `.\.venv\Scripts\python.exe -m scripts.demo_p1_fixture`: `new_leads=2`, `duplicates_on_repeat=2`, `unverified_leads=2`, `founder_tasks=2`, `paying_clients=0`, `audit_valid=true`.
-- CI: pending first GitHub Actions run on this integration branch. Final run URL and SHA are reported in the completion message; update this handoff after the run if GitHub permits.
+- GitHub Actions [Python checks run 38166034332](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/actions/runs/38166034332) completed **success** for code commit `51f6b1fcbd9f0198173af42ed0f1c3205475d992` (Python 3.11, requirements plus pytest, compile, diff, full suite). The final handoff-only commit's run is verified separately in the completion message.
 
 ## Security and integration risk register
 
