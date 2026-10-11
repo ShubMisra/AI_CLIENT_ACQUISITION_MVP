@@ -1,5 +1,9 @@
 # Codex P0 handoff — 2026-10-11
 
+## P1 integration update — 2026-10-12
+
+Issue #1 and draft PR #3 review gates are addressed on the separate `feat/codex-p1-integration` branch with Kilo's published branch merged there. The real `CorePolicyPort` is injected into the Kilo worker for a fixture-only pilot; core now preserves correlated candidate observations and founder tasks. The combined local suite passes with 58 tests. See [INTEGRATION_HANDOFF.md](INTEGRATION_HANDOFF.md) for exact files, verification, decision log, and remaining live integration risks. This P0 handoff below remains the historical P0 record.
+
 ## Assignment summary and delivery state
 
 The approved assignment was to repair founder authentication, source access control, audit and memory redaction, unique paying-client counting, commercial event recording, and the shared acquisition-agent authorization interface.

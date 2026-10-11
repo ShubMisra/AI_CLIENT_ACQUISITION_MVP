@@ -81,6 +81,7 @@ _BEARER_RE=re.compile(r'(?i)\b(bearer|basic)\s+[a-z0-9._~+/=-]{8,}')
 _URL_USERINFO_RE=re.compile(r'(?i)(https?://)[^\s/@]+@')
 _SENSITIVE_URL_KEYS=('token','secret','password','passwd','pwd','key','credential','auth','signature','sig','session','cookie','code')
 _FOUNDER_AUTH=ContextVar('founder_authenticated',default=False)
+_AUDIT_CORRELATION=ContextVar('audit_correlation',default=None)
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,17 @@ class PolicyPort(Protocol):
 class CorePolicyPort:
     def authorize(self, *, source_id: str, action: str, target_url: str) -> AccessDecision:
         return policy_check(source_id,action,target_url)
+
+
+@contextmanager
+def audit_correlation(correlation_id):
+    """Bind one safe run identifier to all core and policy events in this context."""
+    value=str(correlation_id)
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',value):
+        raise ValueError('invalid audit correlation id')
+    mark=_AUDIT_CORRELATION.set(value)
+    try:yield
+    finally:_AUDIT_CORRELATION.reset(mark)
 
 
 @contextmanager
@@ -295,6 +307,14 @@ def init_db():
             customer_id TEXT REFERENCES customer_entities(id), event_type TEXT NOT NULL,
             evidence_ref TEXT NOT NULL, amount REAL, currency TEXT, created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS lead_observations (
+            id TEXT PRIMARY KEY, lead_id TEXT NOT NULL REFERENCES leads(id),
+            run_id TEXT NOT NULL, source_id TEXT NOT NULL,
+            content_evidence_ref TEXT NOT NULL, access_evidence_ref TEXT NOT NULL,
+            verification_status TEXT NOT NULL DEFAULT 'UNVERIFIED',
+            availability_status TEXT NOT NULL DEFAULT 'UNKNOWN', observed_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_observations_lead ON lead_observations(lead_id);
         CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(status);
         CREATE INDEX IF NOT EXISTS idx_events_target ON events(target_type,target_id);
         CREATE INDEX IF NOT EXISTS idx_sources_lifecycle_state ON sources_lifecycle(lifecycle_state);
@@ -335,7 +355,7 @@ def _event(c, actor, action, target_type='', target_id='', payload=None, correla
     tail=c.execute('SELECT hash FROM events ORDER BY seq DESC LIMIT 1').fetchone()
     prev=tail['hash'] if tail else GENESIS
     data={'event_id':str(uuid.uuid4()),'at':now(),'actor':_redact(actor),'action':_redact(action),
-          'target_type':_redact(target_type),'target_id':_redact(target_id),'correlation_id':_redact(correlation_id) if correlation_id else str(uuid.uuid4()),
+          'target_type':_redact(target_type),'target_id':_redact(target_id),'correlation_id':_redact(correlation_id or _AUDIT_CORRELATION.get() or str(uuid.uuid4())),
           'payload':payload}
     digest=hashlib.sha256((prev+'|'+dumps(data)).encode('utf-8')).hexdigest()
     c.execute('INSERT INTO events(event_id,at,actor,action,target_type,target_id,correlation_id,payload,prev_hash,hash) VALUES(?,?,?,?,?,?,?,?,?,?)',
@@ -398,6 +418,38 @@ def add_lead(item,actor='discovery_agent', correlation_id=None):
         audit_lead['description_sha256']=hashlib.sha256(inp['description'].encode('utf-8')).hexdigest()
         _event(c,actor,'LEAD_DISCOVERED','lead',lead_id,{'lead':audit_lead,'score':rating},correlation_id)
     return {'id':lead_id,'created':True,'score':rating}
+
+
+def record_candidate_observation(lead_id, run_id, source_id,
+                                 content_evidence_ref, access_evidence_ref):
+    """Preserve unverified extraction evidence, including repeat observations."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',str(run_id)):
+        raise ValueError('invalid run id')
+    if not content_evidence_ref or not access_evidence_ref:
+        raise ValueError('candidate evidence references required')
+    observation_id=str(uuid.uuid4())
+    with atomic() as c:
+        lead=c.execute('SELECT source FROM leads WHERE id=?',(lead_id,)).fetchone()
+        if not lead or lead['source']!=source_id:
+            raise ValueError('lead/source mismatch')
+        content_ref=_redact(str(content_evidence_ref))
+        access_ref=_redact(str(access_evidence_ref))
+        c.execute('INSERT INTO lead_observations VALUES(?,?,?,?,?,?,?,?,?)',
+                  (observation_id,lead_id,run_id,source_id,content_ref,access_ref,
+                   'UNVERIFIED','UNKNOWN',now()))
+        _event(c,'acquisition_agent','CANDIDATE_OBSERVED','lead',lead_id,
+               {'observation_id':observation_id,'content_evidence_ref':content_ref,
+                'access_evidence_ref':access_ref,'verification_status':'UNVERIFIED',
+                'availability_status':'UNKNOWN'},run_id)
+    return observation_id
+
+
+def list_lead_observations(lead_id):
+    init_db()
+    with _con() as c:
+        return [dict(row) for row in c.execute(
+            'SELECT * FROM lead_observations WHERE lead_id=? ORDER BY observed_at,id',
+            (lead_id,)).fetchall()]
 
 
 def get_lead(lead_id):
