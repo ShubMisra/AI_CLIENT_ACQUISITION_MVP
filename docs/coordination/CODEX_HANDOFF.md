@@ -1,5 +1,14 @@
 # Codex P0 handoff — 2026-10-11
 
+## Assignment summary and delivery state
+
+The approved assignment was to repair founder authentication, source access control, audit and memory redaction, unique paying-client counting, commercial event recording, and the shared acquisition-agent authorization interface.
+
+- **Implemented and tested:** The controls and regressions described below passed the local suite.
+- **Implemented but not integration-tested:** Brave, Freelancer and RSS policy checks and guarded transport have mocked tests, but no live provider call or joint test with Kilo's new modules has occurred.
+- **Designed only:** The injected `PolicyPort` interface is published for Kilo; adoption by Kilo's separate branch is pending.
+- **Incomplete or blocked:** Founder source activation, live provider permission checks, legacy commercial-evidence backfill, and joint branch integration remain open.
+
 ## Revision and scope
 
 - Root: `C:\Users\PC\Desktop\acq-codex`; branch: `feat/codex-p0-controls`.
@@ -7,6 +16,18 @@
 - Interface contract commit: `cf55774cc7d49378e28f6dc5325452cce5d6f585`.
 - Verified implementation HEAD before this handoff: `4ae6f81d4a5becac0a577c452720dc37449a7ea5`. The handoff commit's own SHA is available with `git log -1 -- docs/coordination/CODEX_HANDOFF.md` (a committed file cannot contain its own hash).
 - Committed implementation paths: `acqsys/core.py`, `acqsys/app.py`, `acqsys/agents.py`, `acqsys/__main__.py`, `tests/test_core.py`, `docs/coordination/INTERFACE_CONTRACT.md`; this handoff adds `docs/coordination/CODEX_HANDOFF.md`. The supplied `.team/` directory remains untracked and was not modified or committed. No Kilo-owned path was edited.
+
+## Changed files
+
+| Path | Responsibility |
+|---|---|
+| `acqsys/core.py` | Founder sessions, policy decisions, audit redaction, migrations, customer and commercial accounting. |
+| `acqsys/app.py` | API authentication and founder-gated policy, customer and commercial routes. |
+| `acqsys/agents.py` | Pre-request policy checks and guarded source transport. |
+| `acqsys/__main__.py` | Authenticated founder CLI operations. |
+| `tests/test_core.py` | Authentication, denial, redaction, migration and commercial regression coverage. |
+| `docs/coordination/INTERFACE_CONTRACT.md` | Shared authorization port and integration requirements. |
+| `docs/coordination/CODEX_HANDOFF.md` | Delivery evidence and remaining integration work. |
 
 ## Implemented and verified
 
@@ -23,6 +44,13 @@
 - `git diff --check` passed before the implementation commit. Tests use temporary SQLite databases, fake API responses and dummy tokens; no client contact, real credentials or provider crawl occurred.
 - Adversarial cases cover missing/weak/spoofed auth, unauthorized reads, source state/scope/expiry/account/rate denials, no-network connector denial, pinned-IP fetch, nested secrets and URL userinfo, migration of historical audit data, duplicate paid leads for one customer, partial/full refunds, and authenticated commercial/API flows. An independent read-only review found six issues; keyed-secret redaction, DNS rebinding, encoded traversal, existing-customer verification, refund accounting and read authentication were addressed.
 
+## Business impact
+
+- **Discovery and qualification:** Source policy checks prevent unreviewed discovery calls; customer identity and scope evidence support qualification. Observed evidence is passing local tests, with no live buyer discovery measured.
+- **Founder time and proposals:** Recorded contacts and proposals make checkpoints reflect actual work and reduce manual reconciliation; no time saving or proposal throughput has been measured.
+- **Conversion:** Distinct verified customers with positive net receipts make the three-client goal measurable without duplicate leads or refunded payments inflating it. No conversion or revenue change has been observed.
+- **Reliability and auditability:** Authenticated decisions, denial events, immutable hash-chain history and redaction improve local control and reviewability. Production behavior still depends on founder-confirmed source permissions and integration testing.
+
 ## Interface and integration
 
 - Kilo should inject a `PolicyPort` conforming to [INTERFACE_CONTRACT.md](INTERFACE_CONTRACT.md), call it immediately before every actual browser/API operation, and stop on `allowed=False`. Tests should use a fake port; production uses `core.CorePolicyPort`. Do not treat a login, a manual-only source, or a Brave/Freelancer result URL as crawl authorization.
@@ -34,3 +62,9 @@
 - No live Brave/Freelancer/RSS smoke test or provider permission activation was performed. The Freelancer read-only endpoint follows the official SDK's `search_projects(active_only=True)` path, but response shape and account permissions still need a founder-authorized live check. The shared README, AGENTS and optional-requirements files still describe the older token/SDK workflow; coordinate edits after integration.
 - Payment and independent identity evidence are founder attestations with references, not bank or legal-registry integrations. The founder must reuse one canonical customer key per organization. Historical `WON` rows require explicit evidence backfill before counting. Free-form private text cannot be perfectly classified by regex redaction; avoid importing confidential client material.
 - Next commercial action: founder rechecks the dated candidate links in manual-only mode, confirms employment/IP gates and campaign start date, then records viable leads and actual outreach events. No outbound action was taken here.
+
+## Suggested next three tasks for Chief Architect review
+
+1. **Integrate Kilo's acquisition modules in a third worktree.** Acceptance: every live browser/API operation calls the injected policy port immediately before access; denial causes zero network requests; the combined test suite passes without edits to either feature branch.
+2. **Run one founder-authorized source pilot.** Acceptance: founder records policy evidence, scope, version and expiry for one permitted source; one bounded live request succeeds; one denied scope produces an audited denial and zero requests. Do not use credentials until the founder supplies an approved vault reference.
+3. **Validate the commercial funnel on real founder records.** Acceptance: each claimed paying client has a distinct verified customer key, scope record and positive net receipt; checkpoint totals match recorded contacts and proposals; the founder reviews the resulting count against payment evidence.
