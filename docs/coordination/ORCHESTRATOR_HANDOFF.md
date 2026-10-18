@@ -7,6 +7,17 @@ in `C:\Users\PC\Desktop\acq-orchestrator`, branch
 `feat/supervised-orchestrator`, based on `9813c0ec0b998b9fb4d2ba297b4b0113d0a9a90e`.
 No Kilo worktree or acquisition application file was changed.
 
+## Review artifact
+
+- Implementation commit: `19c222f3e9c9ecdaafa7febdf293bb826ce14f3c`.
+- [Draft PR #7](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/pull/7)
+  targets `feat/codex-p1-integration` for an isolated review. No merge was made.
+- [Push CI](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/actions/runs/39110550843)
+  and [PR CI](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/actions/runs/39110566380)
+  both completed successfully for implementation SHA `19c222f3e9c9ecdaafa7febdf293bb826ce14f3c`.
+- Final handoff-only commit follows the implementation commit; its CI result is
+  recorded in the PR checks and final review report.
+
 ## Executable delivery
 
 - `orchestrator/policy.py`: trusted task schema; founder, GitHub issue,
@@ -35,7 +46,7 @@ No Kilo worktree or acquisition application file was changed.
   → **16 passed**. Full regression: `.\.venv\Scripts\python.exe -m pytest -q`
   → **74 passed**, one upstream Starlette/httpx deprecation warning.
   `python -m compileall -q acqsys orchestrator tests` and `git diff --check`
-  passed. CI evidence will be recorded after push.
+  passed. Push and PR CI passed at the implementation commit above.
 - Mock cycle: one founder-approved toy issue routes to its owner, makes a
   scoped toy commit, checks acceptance test identity and mocked CI, records
   independent review, then creates a draft PR only after founder approval.
