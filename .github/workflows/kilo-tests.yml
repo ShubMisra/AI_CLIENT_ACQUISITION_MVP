@@ -1,0 +1,22 @@
+﻿name: Kilo Acquisition Tests
+
+on:
+  push:
+    branches: [feat/kilo-acquisition-pilot]
+  pull_request:
+    branches: [feat/kilo-acquisition-pilot]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Install deps
+      run: |
+        pip install pytest httpx fastapi pydantic
+    - name: Run tests
+      run: |
+        python -m pytest -q

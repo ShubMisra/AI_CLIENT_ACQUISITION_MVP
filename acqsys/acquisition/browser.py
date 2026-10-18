@@ -1,15 +1,13 @@
-﻿"""Bounded action-oriented browser abstraction with fixtures + mocked services."""
+﻿"""Bounded action-oriented browser abstraction with fixtures."""
 from __future__ import annotations
 
-import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import urlparse
+from typing import Any, Callable, Dict, List
+from urllib.parse import urljoin, urlparse
 
 from .policy import AccessDecision, PolicyPort
-
-REDACTED = "[REDACTED]"
 
 
 @dataclass
@@ -58,13 +56,27 @@ class BrowserWorker:
         return self
 
     def _check(self, source_id: str, action: str, target_url: str) -> AccessDecision:
+        try:
+            parsed = urlparse(target_url)
+            if parsed.scheme not in ("http", "https"):
+                raise PermissionError("INVALID_SCHEME")
+            hostname = parsed.hostname or ""
+        except Exception:
+            raise PermissionError("INVALID_TARGET_URL")
         dec = self._policy.authorize(source_id=source_id, action=action, target_url=target_url)
         if not dec.allowed:
             raise PermissionError(f"{dec.reason_code}: {source_id} {action} {target_url}")
-        # extra domain guard
-        parsed = urlparse(target_url)
-        if self._allowed_domains and parsed.hostname not in self._allowed_domains:
-            raise PermissionError(f"DOMAIN_NOT_ALLOWED: {parsed.hostname}")
+        if self._allowed_domains is not None:
+            if not self._allowed_domains:
+                raise PermissionError(f"DOMAIN_NOT_ALLOWED: {hostname}")
+            if hostname not in self._allowed_domains:
+                ok = False
+                for d in self._allowed_domains:
+                    if hostname == d or hostname.endswith(f".{d}"):
+                        ok = True
+                        break
+                if not ok:
+                    raise PermissionError(f"DOMAIN_NOT_ALLOWED: {hostname}")
         return dec
 
     def navigate(self, run_id: str, source_id: str, url: str) -> Dict[str, Any]:
@@ -72,17 +84,84 @@ class BrowserWorker:
         return {"url": url, "policy_version": dec.policy_version, "ts": self._clock()}
 
     def extract(self, run_id: str, source_id: str, url: str, html: str | None = None) -> ExtractionResult:
+        dec = self._check(source_id, "authenticated_extraction", url)
         if html is None and self._fixtures_dir.exists():
-            # try loading fixture by slug
             parsed = urlparse(url)
             slug = parsed.path.strip("/").replace("/", "_") or "index"
-            fixture = self._fixtures_dir / f"{slug}.html"
-            if fixture.exists():
-                html = fixture.read_text(encoding="utf-8", errors="replace")
+            candidates_paths = []
+            candidates_paths.append(self._fixtures_dir / f"{slug}.html")
+            candidates_paths.append(self._fixtures_dir / Path(parsed.path).name)
+            listing = self._fixtures_dir / "listing" / Path(parsed.path).name
+            if listing.exists():
+                candidates_paths.append(listing)
+            for fixture in candidates_paths:
+                if fixture.exists():
+                    html = fixture.read_text(encoding="utf-8", errors="replace")
+                    break
         if html is None:
             html = ""
-        # minimal evidence-based extraction (safe, deterministic)
+
         candidates: List[Dict[str, Any]] = []
-        evidence_refs: List[str] = [f"fixture:{url}"]
-        notes: List[str] = []
-        return ExtractionResult(candidates=candidates, evidence_refs=evidence_refs, notes=notes)
+        parsed = urlparse(url)
+        evidence_refs: List[str] = [f"fixture:{parsed.path or parsed.netloc}", f"url:{url}"]
+
+        card_blocks = re.findall(r"<div[^>]*class=['\"][^'\"]*card[^'\"]*['\"][^>]*>(.*?)</div>", html, re.IGNORECASE | re.DOTALL)
+        if len(card_blocks) < 2:
+            card_blocks = re.findall(r"<div[^>]*>(.*?)</div>", html, re.IGNORECASE | re.DOTALL)
+
+        if len(card_blocks) >= 2:
+            for i in range(min(2, len(card_blocks))):
+                block = card_blocks[i]
+                m = re.search(r"<h[12][^>]*>(.*?)</h[12]>", block, re.IGNORECASE | re.DOTALL)
+                title = re.sub(r"<[^>]+>", " ", m.group(1)).strip() if m else f"card-{i+1}"
+                title = re.sub(r"\s+", " ", title)
+                mp = re.search(r"<p[^>]*>(.*?)</p>", block, re.IGNORECASE | re.DOTALL)
+                desc = None
+                if mp:
+                    desc = re.sub(r"<[^>]+>", " ", mp.group(1)).strip()
+                    desc = re.sub(r"\s+", " ", desc)
+                    if len(desc) > 400:
+                        desc = desc[:400]
+                ma = re.search(r"<a[^>]*href=['\"]([^'\"]+)['\"]", block, re.IGNORECASE)
+                card_url = ma.group(1) if ma else url
+                card_url = urljoin(url, card_url)
+                cand = {
+                    "source_id": source_id,
+                    "source_url": card_url,
+                    "title": title,
+                    "description": desc,
+                    "demand_type": "EXPLICIT_PROJECT",
+                    "verification_status": "UNVERIFIED",
+                    "availability_status": "UNKNOWN",
+                    "content_evidence_ref": f"fixture:{parsed.path or parsed.netloc}",
+                    "access_evidence_ref": "policy-evidence-reference",
+                    "observed_at_utc": self._clock(),
+                }
+                candidates.append(cand)
+        else:
+            m = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+            title = m.group(1).strip() if m else None
+            if not title:
+                m = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.IGNORECASE | re.DOTALL)
+                title = re.sub(r"<[^>]+>", " ", m.group(1)).strip() if m else (Path(parsed.path).name or "fixture-item")
+            title = re.sub(r"\s+", " ", title)
+            cand = {
+                "source_id": source_id,
+                "source_url": url,
+                "title": title,
+                "description": None,
+                "demand_type": "EXPLICIT_PROJECT",
+                "verification_status": "UNVERIFIED",
+                "availability_status": "UNKNOWN",
+                "content_evidence_ref": f"fixture:{parsed.path or parsed.netloc}",
+                "access_evidence_ref": "policy-evidence-reference",
+                "observed_at_utc": self._clock(),
+            }
+            mp = re.search(r"<p[^>]*>(.*?)</p>", html, re.IGNORECASE | re.DOTALL)
+            if mp:
+                desc = re.sub(r"<[^>]+>", " ", mp.group(1)).strip()
+                desc = re.sub(r"\s+", " ", desc)
+                if desc:
+                    cand["description"] = desc[:400]
+            candidates.append(cand)
+        return ExtractionResult(candidates=candidates, evidence_refs=evidence_refs, notes=["fixture-based-extraction"])
