@@ -1,23 +1,14 @@
 ﻿from acqsys.acquisition import policy, browser, workflow, worker, cli_triage
 from pathlib import Path
-import tempfile
-import os
-
 
 def test_multi_card_extraction_two_distinct():
     p = policy.AllowFixturePolicy(allowed_sources={"src"}, allowed_actions={"browser_navigation","authenticated_extraction"}, allowed_domains={"example.com"})
     b = browser.BrowserWorker(p, fixtures_dir=Path("tests/fixtures/acquisition/listing"))
     b.configure(allowed_domains={"example.com"})
-    urls = ["https://example.com/listing/a.html", "https://example.com/listing/b.html"]
-    results = []
-    for url in urls:
-        nav = b.navigate("r1", "src", url)
-        ext = b.extract("r1", "src", url)
-        assert ext.candidates
-        assert ext.evidence_refs
-        results.append((nav["url"], ext.candidates[0]["title"], ext.candidates[0]["description"]))
-    assert results[0][0] != results[1][0]
-    assert results[0][1] != results[1][1]
+    ext = b.extract("r1", "src", "https://example.com/listing/cards.html")
+    assert len(ext.candidates) == 2
+    assert ext.candidates[0]['source_url'] != ext.candidates[1]['source_url']
+    assert ext.candidates[0]['content_evidence_ref'] != ext.candidates[1]['content_evidence_ref']
 
 
 def test_independent_auth_nav_and_extract():
@@ -46,12 +37,12 @@ def test_triage_loads_historical_json():
 def test_checkpoint_atomic_persist_and_resume_fresh_policy():
     items = cli_triage.triage()
     assert len(items) == 10
-    wf = workflow.WorkflowState(storage_path=Path("data/test_acq_atomic2.json"))
+    wf = workflow.WorkflowState(storage_path=Path("data/test_acq_atomic3.json"))
     wf.checkpoint("cp1", "r1", "s1", {"k": 1})
     wf.checkpoint("cp2", "r2", "s2", {"k": 2})
-    cp = wf.restore()
+    cp = wf.restore(policy_check=lambda: True)
     assert cp and cp.cp_id == "cp2"
-    cp2 = wf.restore("cp1")
+    cp2 = wf.restore("cp1", policy_check=lambda: True)
     assert cp2 and cp2.cp_id == "cp1"
 
 

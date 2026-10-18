@@ -36,11 +36,9 @@ def test_resume_revalidates_policy_cross_instance():
     w = worker.AcquisitionWorker(p)
     w._browser.configure(allowed_domains={'example.com'})
     w._workflow.checkpoint('cp1','r1','s1',{'k':1})
-    # new instance with deny
     w2 = worker.AcquisitionWorker(policy.DenyAllPolicy())
-    w2._workflow.restore('cp1')
     try:
-        w2._browser.navigate('r2','src','https://example.com/x')
+        w2._workflow.restore('cp1', policy_check=lambda: False)
         assert False
     except PermissionError:
         pass

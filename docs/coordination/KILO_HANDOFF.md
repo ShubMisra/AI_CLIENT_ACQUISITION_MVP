@@ -1,19 +1,17 @@
 ﻿# Kilo Handoff: Acquisition Browser Module
 
 ## Summary
-All blockers addressed per latest review: strict default-deny (None/empty allowlists denied), independent authenticated_extraction auth, two cards from one HTML with distinct URLs and evidence after dedup, policy-checked cross-instance resume, visible persistence failures (RuntimeError), genuine historical-data error handling (missing/corrupt raises FileNotFoundError). Added meaningful negative/security tests and Kilo CI. 55 tests pass.
+HTTPS/global host checks, distinct per-card evidence, mandatory policy-checked resume with corruption handling, genuine historical-data failure handling, two cards from one HTML with distinct URLs, independent auth. 56 tests pass, Kilo CI present.
 
 ## Changes
-- Policy: None/empty allowlists and invalid scheme deny
-- Browser: two-card extraction with absolute/distinct per-card URLs; independent nav/extract auth; evidence refs
-- Workflow: policy_check on resume/restore; RuntimeError on atomic persist failure
-- Triage: real historical JSON required; corrupt/missing raise FileNotFoundError with context
-- CI: .github/workflows/kilo-tests.yml
-- Tests: comprehensive negative/security cases
+- Policy: HTTPS-only, global IP/private host rejection, None/empty allowlists deny
+- Browser: distinct per-card URLs and distinct content_evidence_ref per card; independent nav/extract auth; scheme/domain/host security
+- Workflow: restore requires policy_check; corrupted checkpoints handled (reset safely); atomic persist failures raise RuntimeError
+- Triage: real historical JSON required; missing/corrupt raise FileNotFoundError with context
 
 ## Commit
 Branch: feat/kilo-acquisition-pilot
-SHA: 0394a1ade86cf5397108060993c59fc39ea9455e
+SHA: fbe116d59a10bca579382ddfdee6fccf1d66cc31
 
 ## Links
 - Branch: https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/tree/feat/kilo-acquisition-pilot
