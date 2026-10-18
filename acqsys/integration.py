@@ -1,129 +1,218 @@
-"""Fixture-only bridge from Kilo's policy-injected worker into core state.
-
-This module has no HTTP or browser transport. A live collector must be reviewed
-separately; fixture authorization does not grant live source access.
-"""
+"""Fixture-only bridge from Kilo's public collector to central core policy/state."""
 from __future__ import annotations
 
 import hashlib
-from html.parser import HTMLParser
-from typing import Mapping
+import json
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from acqsys import core
-from acqsys.acquisition.worker import AcquisitionWorker
+from acqsys.acquisition.browser import BrowserWorker
+from acqsys.acquisition.lead_qual import deduplicate
+
+HISTORICAL_FILE = Path(__file__).resolve().parent.parent / 'lead_candidates_2026-10-10.json'
+
+
+class _FixturePath:
+    """The public BrowserWorker fixtures_dir interface, backed by known text."""
+
+    def __init__(self, transport: 'FixtureTransport', parts: tuple[str, ...] = ()):
+        self.transport, self.parts = transport, parts
+
+    def __truediv__(self, part):
+        return _FixturePath(self.transport, (*self.parts, str(part)))
+
+    def exists(self):
+        return not self.parts or '/'.join(self.parts) in self.transport._paths
+
+    def read_text(self, *, encoding='utf-8', errors='strict'):
+        key = '/'.join(self.parts)
+        url, html = self.transport._paths[key]
+        if len(html.encode('utf-8')) > 1_000_000:
+            raise ValueError('fixture exceeds byte limit')
+        self.transport.reads.append(url)
+        return html
 
 
 class FixtureTransport:
-    """Instrumentable, in-memory fixture source; missing URLs fail closed."""
+    """Instrumented public fixture filesystem; it cannot make HTTP requests."""
 
-    def __init__(self, pages: Mapping[str, str]):
-        self._pages = dict(pages)
+    def __init__(self, pages: dict[str, str]):
+        self.pages = dict(pages)
         self.reads: list[str] = []
+        self._paths: dict[str, tuple[str, str]] = {}
+        for url, html in self.pages.items():
+            path = urlsplit(url).path.strip('/').replace('/', '_') or 'index'
+            key = path + '.html'
+            if key in self._paths or not isinstance(html, str):
+                raise ValueError('ambiguous or invalid fixture page')
+            self._paths[key] = (url, html)
+        self.fixture_root = _FixturePath(self)
 
-    def read(self, url: str) -> str:
-        if url not in self._pages:
-            raise ValueError('fixture unavailable')
-        if len(self._pages[url].encode('utf-8')) > 1_000_000:
-            raise ValueError('fixture exceeds byte limit')
-        self.reads.append(url)
-        return self._pages[url]
 
-
-class _ProjectParser(HTMLParser):
+class _TracedCorePort(core.CorePolicyPort):
     def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self._active: str | None = None
-        self.title: list[str] = []
-        self.description: list[str] = []
+        self.decisions: list[tuple[str, core.AccessDecision]] = []
 
-    def handle_starttag(self, tag, attrs):
-        if tag in ('h1', 'p'):
-            self._active = tag
+    def authorize(self, *, source_id: str, action: str, target_url: str):
+        decision = super().authorize(source_id=source_id, action=action,
+                                     target_url=target_url)
+        self.decisions.append((action, decision))
+        return decision
 
-    def handle_endtag(self, tag):
-        if tag == self._active:
-            self._active = None
+    def last_extraction(self):
+        for action, decision in reversed(self.decisions):
+            if action == 'authenticated_extraction':
+                return decision
+        raise PermissionError('extraction was not authorized')
 
-    def handle_data(self, data):
-        if self._active == 'h1':
-            self.title.append(data)
-        elif self._active == 'p':
-            self.description.append(data)
+
+def _candidate_from_public_result(raw: dict, *, page_url: str, html: str,
+                                  source_id: str, run_id: str, decision) -> dict:
+    """Validate Kilo's DTO; do not parse HTML or invent buyer verification."""
+    url = core.normalize_url(str(raw.get('source_url') or ''))
+    parsed = urlsplit(url)
+    if parsed.scheme != 'https' or parsed.hostname != 'fixture.example' or \
+       not parsed.path.startswith('/projects/'):
+        raise ValueError('candidate URL outside synthetic project scope')
+    title = str(raw.get('title') or '').strip()
+    description = str(raw.get('description') or '').strip()
+    if not title or not description or raw.get('source_id') != source_id:
+        raise ValueError('candidate lacks grounded title, description or source')
+    # This binds the public DTO's individual URL to the exact fixture page bytes.
+    # Kilo's own per-card locator remains a release blocker on PR #4.
+    page_hash = hashlib.sha256(html.encode()).hexdigest()
+    url_hash = hashlib.sha256(url.encode()).hexdigest()
+    evidence_ref = f'fixture:sha256:{page_hash}:url-sha256:{url_hash}'
+    return core.redact({'source': source_id, 'source_id': source_id,
+                        'source_url': url, 'title': title,
+                        'description': description, 'demand_type': 'EXPLICIT_PROJECT',
+                        'verification_status': 'UNVERIFIED',
+                        'availability_status': 'UNKNOWN',
+                        'content_evidence_ref': evidence_ref,
+                        'access_evidence_ref': 'policy-version:' + str(decision.policy_version),
+                        'run_id': run_id, 'source_page_url': page_url})
 
 
 def run_fixture_pilot(*, source_id: str, urls: list[str], transport: FixtureTransport,
                       run_id: str) -> dict:
-    """Authorize each fixture navigation and extraction, then persist candidates.
-
-    The Kilo worker performs navigation authorization. This adapter supplies its
-    missing extraction gate and candidate persistence without changing Kilo files.
-    """
-    port = core.CorePolicyPort()
-    worker = AcquisitionWorker(port)
-    results = []
+    """Reauthorize every public navigation/extraction, then write central state."""
     with core.audit_correlation(run_id):
-        core.record_event('acquisition_agent','COLLECTOR_STARTED',
-                          {'source_id': source_id, 'fixture_only': True},'source',source_id)
-        for url in urls:
+        core.create_fixture_run(run_id, source_id, urls)
+        state = core.fixture_run(run_id)
+        if state['status'] == 'COMPLETED':
+            return {'run_id': run_id, 'results': [], 'status': 'COMPLETED'}
+        port = _TracedCorePort()
+        browser = BrowserWorker(port, fixtures_dir=transport.fixture_root)
+        browser.configure(allowed_domains={'fixture.example'})
+        results: list[dict] = []
+        for index in range(state['cursor'], len(urls)):
+            url = urls[index]
             try:
-                # No transport read occurs until both policy decisions permit it.
-                worker._browser.navigate(run_id, source_id, url)
-                decision = port.authorize(source_id=source_id,
-                                          action='authenticated_extraction', target_url=url)
-                if not decision.allowed:
-                    results.append({'url': core.normalize_url(url), 'denied': decision.reason_code})
-                    continue
+                browser.navigate(run_id, source_id, url)
                 if source_id != 'fixture' or urlsplit(url).hostname != 'fixture.example':
-                    raise ValueError('fixture pilot requires the fixture source')
-                html = transport.read(url)
-                parser = _ProjectParser()
-                parser.feed(html)
-                title = ' '.join(''.join(parser.title).split())
-                description = ' '.join(''.join(parser.description).split())
-                if not title or not description:
-                    core.record_event('acquisition_agent','CANDIDATE_REJECTED',
-                                      {'reason_code':'EMPTY_EXTRACTION'},'source',source_id)
-                    results.append({'url': core.normalize_url(url), 'error':'EMPTY_EXTRACTION'})
-                    continue
-                evidence_ref = 'fixture:sha256:' + hashlib.sha256(html.encode()).hexdigest()
-                candidate = {'source':source_id, 'source_id':source_id,
-                             'source_url':core.normalize_url(url), 'title':title,
-                             'description':description, 'demand_type':'EXPLICIT_PROJECT',
-                             'verification_status':'UNVERIFIED', 'availability_status':'UNKNOWN',
-                             'content_evidence_ref':evidence_ref,
-                             'access_evidence_ref':'policy-version:' + str(decision.policy_version),
-                             'run_id':run_id}
-                candidate = core.redact(candidate)
-                lead = core.add_lead(candidate, actor='acquisition_agent', correlation_id=run_id)
-                core.record_candidate_observation(
-                    lead['id'],run_id,source_id,evidence_ref,candidate['access_evidence_ref'])
-                action = 'CANDIDATE_EXTRACTED' if lead['created'] else 'CANDIDATE_DEDUPLICATED'
-                core.record_event('acquisition_agent',action,
-                                  {'source_id':source_id, 'content_evidence_ref':evidence_ref,
-                                   'access_evidence_ref':candidate['access_evidence_ref'],
-                                   'verification_status':'UNVERIFIED',
-                                   'availability_status':'UNKNOWN'},
-                                  'lead',lead['id'])
-                if lead['created']:
-                    task_id=core.create_task('Verify candidate buyer and source evidence',
-                                             lead_id=lead['id'],actor='acquisition_agent')
-                    core.record_event('acquisition_agent','HUMAN_TASK_CREATED',
-                                      {'task_id':task_id},'lead',lead['id'])
-                results.append({'candidate':candidate, 'lead_id':lead['id'],
-                                'created':lead['created']})
+                    raise PermissionError('synthetic fixture source required')
+                core.update_fixture_run(run_id, index, 'RUNNING')
+                before = len(transport.reads)
+                extraction = browser.extract(run_id, source_id, url)
+                decision = port.last_extraction()
+                if not decision.allowed or len(transport.reads) == before or \
+                   transport.reads[-1] != url or not extraction.candidates:
+                    raise ValueError('empty or unread fixture extraction')
+                candidates = deduplicate(extraction.candidates)
+                mapped = [_candidate_from_public_result(
+                    raw, page_url=url, html=transport.pages[url], source_id=source_id,
+                    run_id=run_id, decision=decision) for raw in candidates]
+                page_results = []
+                for candidate in mapped:
+                    lead = core.add_lead(candidate, actor='acquisition_agent',
+                                         correlation_id=run_id)
+                    core.record_candidate_observation(
+                        lead['id'], run_id, source_id,
+                        candidate['content_evidence_ref'],
+                        candidate['access_evidence_ref'])
+                    core.record_event('acquisition_agent',
+                                      'CANDIDATE_EXTRACTED' if lead['created'] else
+                                      'CANDIDATE_DEDUPLICATED',
+                                      {'source_id': source_id,
+                                       'content_evidence_ref': candidate['content_evidence_ref'],
+                                       'verification_status': 'UNVERIFIED',
+                                       'availability_status': 'UNKNOWN'},
+                                      'lead', lead['id'])
+                    task_id, task_created = core.ensure_founder_review_task(
+                        lead['id'], 'Verify candidate buyer and source evidence',
+                        actor='acquisition_agent')
+                    if task_created:
+                        core.record_event('acquisition_agent', 'HUMAN_TASK_CREATED',
+                                          {'task_id': task_id}, 'lead', lead['id'])
+                    page_results.append({'candidate': candidate, 'lead_id': lead['id'],
+                                         'created': lead['created']})
+                if not page_results:
+                    raise ValueError('no grounded candidates')
+                results.extend(page_results)
+                core.update_fixture_run(run_id, index + 1,
+                                        'COMPLETED' if index + 1 == len(urls) else 'RUNNING')
             except PermissionError:
-                # CorePolicyPort already records a redacted ACTION_DENIED.
-                results.append({'denied':'POLICY_DENIED'})
+                core.update_fixture_run(run_id, index, 'BLOCKED')
+                results.append({'url': core.redact(url), 'denied': 'POLICY_DENIED'})
+                break
             except Exception as exc:
-                core.record_event('acquisition_agent','COLLECTOR_ITEM_FAILED',
-                                  {'error_type':type(exc).__name__},'source',source_id)
-                results.append({'error':type(exc).__name__})
-        core.add_memory('acquisition-run:'+run_id,'HYPOTHESIS',
-                        f'{sum(bool(r.get("created")) for r in results)} fixture candidates need founder verification',
-                        'fixture-run:'+run_id,0.5,actor='acquisition_agent')
-        core.record_event('acquisition_agent','COLLECTOR_FINISHED',
-                          {'created':sum(bool(r.get('created')) for r in results),
-                           'duplicates':sum(r.get('created') is False for r in results),
-                           'denied':sum('denied' in r for r in results)},'source',source_id)
-    return {'run_id':run_id,'results':results}
+                core.update_fixture_run(run_id, index, 'BLOCKED')
+                core.record_event('acquisition_agent', 'COLLECTOR_ITEM_FAILED',
+                                  {'error_type': type(exc).__name__}, 'source', source_id)
+                results.append({'url': core.redact(url), 'error': type(exc).__name__})
+                break
+        core.add_memory('acquisition-run:' + run_id, 'HYPOTHESIS',
+                        f'{sum(r.get("created") is True for r in results)} fixture candidates need founder verification',
+                        'fixture-run:' + run_id, 0.5, actor='acquisition_agent')
+        core.record_event('acquisition_agent', 'COLLECTOR_FINISHED',
+                          {'created': sum(r.get('created') is True for r in results),
+                           'duplicates': sum(r.get('created') is False for r in results),
+                           'denied': sum('denied' in r for r in results)},
+                          'source', source_id)
+    return {'run_id': run_id, 'results': results,
+            'status': core.fixture_run(run_id)['status']}
+
+
+def resume_fixture_pilot(*, run_id: str, transport: FixtureTransport) -> dict:
+    """Restore centrally bound source/URLs; every operation rechecks policy."""
+    state = core.fixture_run(run_id)
+    if not state:
+        raise ValueError('fixture run not found')
+    return run_fixture_pilot(source_id=state['source_id'], urls=state['urls'],
+                             transport=transport, run_id=run_id)
+
+
+def import_historical_candidates(*, run_id: str, founder_token: str) -> dict:
+    """Founder-approved local intake of the genuine root historical file."""
+    with core.founder_session(founder_token), core.audit_correlation(run_id):
+        raw = HISTORICAL_FILE.read_bytes()  # Missing/corrupt root fails; no fixture fallback.
+        data = json.loads(raw)
+        if not isinstance(data, list) or not data:
+            raise ValueError('historical candidates must be a nonempty list')
+        for item in data:
+            if not isinstance(item, dict) or not item.get('source') or not item.get('source_url') or \
+               not item.get('title') or not item.get('description'):
+                raise ValueError('historical candidate lacks provenance or content')
+            core.normalize_url(item['source_url'])
+        file_hash = hashlib.sha256(raw).hexdigest()
+        results = []
+        for index, item in enumerate(data):
+            source_id = str(item['source'])
+            candidate = {**item, 'verification_status': 'UNVERIFIED',
+                         'availability_status': 'UNKNOWN'}
+            lead = core.add_lead(candidate, actor='founder', correlation_id=run_id)
+            evidence_ref = f'historical-file:sha256:{file_hash}:row:{index + 1}'
+            core.record_candidate_observation(lead['id'], run_id, source_id,
+                                              evidence_ref, 'founder-local-file-import')
+            core.ensure_founder_review_task(
+                lead['id'], 'Verify historical candidate freshness, buyer and source evidence',
+                actor='founder')
+            results.append({'lead_id': lead['id'], 'created': lead['created'],
+                            'source_url': core.normalize_url(item['source_url']),
+                            'verification_status': 'UNVERIFIED',
+                            'availability_status': 'UNKNOWN'})
+        core.record_event('founder', 'HISTORICAL_CANDIDATES_IMPORTED',
+                          {'count': len(results), 'created': sum(r['created'] for r in results),
+                           'file_sha256': file_hash}, 'source', 'historical-local-file')
+    return {'run_id': run_id, 'results': results}

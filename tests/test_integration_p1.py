@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 from acqsys import core
-from acqsys.integration import FixtureTransport, run_fixture_pilot
+from acqsys.integration import (FixtureTransport, run_fixture_pilot,
+                                resume_fixture_pilot, import_historical_candidates)
+from acqsys import integration
 
 
 TOKEN = 'fixture-founder-token'
@@ -16,6 +18,11 @@ PAGES = {
     URL_A: '<h1>Document classifier</h1><p>Build a classifier for a document queue.</p>',
     URL_B: '<h1>Forecasting model</h1><p>Build a demand forecasting model.</p>',
 }
+LISTING_URL = 'https://fixture.example/listing/cards.html'
+CARDS = '''<html><body>
+<div class="card"><h2>Document classifier</h2><p>Build a classifier for a document queue.</p><a href="/projects/123">View</a></div>
+<div class="card"><h2>Forecasting model</h2><p>Build a demand forecasting model.</p><a href="/projects/124">View</a></div>
+</body></html>'''
 
 
 @pytest.fixture(autouse=True)
@@ -131,3 +138,153 @@ def test_fixture_content_secret_is_redacted_from_result_and_db():
     assert 'fictional-example-value' not in json.dumps(core.list_events(200))
     assert 'fictional-example-value' not in core.list_leads()[0]['description']
     assert core.verify_audit()['valid']
+
+
+def test_public_single_page_extraction_two_distinct_url_leads_and_durable_review():
+    source(paths=['/listing', '/projects'])
+    transport = FixtureTransport({LISTING_URL: CARDS})
+    first = run_fixture_pilot(source_id='fixture', urls=[LISTING_URL],
+                              transport=transport, run_id='cards_first')
+    assert first['status'] == 'COMPLETED'
+    assert transport.reads == [LISTING_URL]
+    assert len(first['results']) == 2
+    assert all(row['created'] for row in first['results'])
+    assert {row['candidate']['source_url'] for row in first['results']} == {URL_A, URL_B}
+    assert len({row['candidate']['content_evidence_ref'] for row in first['results']}) == 2
+    assert len(core.list_leads()) == 2
+    assert len(core.list_tasks()) == 2
+    assert all(not lead['buyer_verified'] and lead['status'] == 'DISCOVERED'
+               for lead in core.list_leads())
+    assert all(obs['verification_status'] == 'UNVERIFIED' and
+               obs['availability_status'] == 'UNKNOWN'
+               for lead in core.list_leads()
+               for obs in core.list_lead_observations(lead['id']))
+    second = run_fixture_pilot(source_id='fixture', urls=[LISTING_URL],
+                               transport=transport, run_id='cards_repeat')
+    assert len(second['results']) == 2
+    assert all(row['created'] is False for row in second['results'])
+    assert len(core.list_leads()) == 2 and len(core.list_tasks()) == 2
+    assert core.verify_audit()['valid']
+
+
+def test_extraction_denied_after_allowed_navigation_has_zero_fixture_reads():
+    source(paths=['/listing'], extraction=False)
+    transport = FixtureTransport({LISTING_URL: CARDS})
+    result = run_fixture_pilot(source_id='fixture', urls=[LISTING_URL],
+                               transport=transport, run_id='extract_denied')
+    assert result['status'] == 'BLOCKED' and transport.reads == []
+    events = [e for e in core.list_events(200) if e['correlation_id'] == 'extract_denied']
+    assert any(e['action'] == 'POLICY_CHECKED' and
+               e['payload'].get('action') == 'browser_navigation' for e in events)
+    assert any(e['action'] == 'ACTION_DENIED' and
+               e['payload'].get('action') == 'authenticated_extraction' for e in events)
+    assert not core.list_leads()
+
+
+def test_public_extractor_fallback_without_fixture_is_rejected():
+    source()
+    transport = FixtureTransport({})
+    result = run_fixture_pilot(source_id='fixture', urls=[URL_A],
+                               transport=transport, run_id='missing_page')
+    assert result['status'] == 'BLOCKED' and transport.reads == []
+    assert result['results'][0]['error'] == 'ValueError'
+    assert not core.list_leads() and not core.list_tasks()
+
+
+def test_bad_card_target_rejects_whole_page_before_intake():
+    source(paths=['/listing'])
+    html = CARDS.replace('href="/projects/124"', 'href="http://127.0.0.1/private"')
+    transport = FixtureTransport({LISTING_URL: html})
+    result = run_fixture_pilot(source_id='fixture', urls=[LISTING_URL],
+                               transport=transport, run_id='bad_card')
+    assert result['status'] == 'BLOCKED' and transport.reads == [LISTING_URL]
+    assert not core.list_leads() and not core.list_tasks()
+
+
+def test_central_resume_revalidates_and_can_complete_after_founder_authorization():
+    source(paths=['/listing'], extraction=False)
+    transport = FixtureTransport({LISTING_URL: CARDS})
+    first = run_fixture_pilot(source_id='fixture', urls=[LISTING_URL],
+                              transport=transport, run_id='resume_authorized')
+    assert first['status'] == 'BLOCKED' and transport.reads == []
+    with core.founder_session(TOKEN):
+        core.update_source_policy('fixture', 'CONFIRMED', {
+            'browser_navigation': True, 'authenticated_extraction': True,
+            'allowed_paths': ['/listing'], 'rate_limit_per_hour': 20,
+        }, 'Founder reviewed resumed fixture scope', actor='founder')
+    resumed = resume_fixture_pilot(run_id='resume_authorized', transport=transport)
+    assert resumed['status'] == 'COMPLETED'
+    assert len(resumed['results']) == 2 and transport.reads == [LISTING_URL]
+    assert core.fixture_run('resume_authorized')['cursor'] == 1
+    assert core.verify_audit()['valid']
+    with pytest.raises(ValueError, match='rebound'):
+        run_fixture_pilot(source_id='fixture', urls=[URL_A], transport=transport,
+                          run_id='resume_authorized')
+
+
+def test_replayed_checkpoint_keeps_two_unique_leads_observations_and_tasks():
+    source(paths=['/listing'])
+    transport = FixtureTransport({LISTING_URL: CARDS})
+    run_fixture_pilot(source_id='fixture', urls=[LISTING_URL],
+                      transport=transport, run_id='crash_replay')
+    # Simulate a crash after intake but before the final cursor write.
+    with sqlite3.connect(core.DB_PATH) as db:
+        db.execute("UPDATE fixture_collection_runs SET cursor=0,status='BLOCKED' WHERE run_id='crash_replay'")
+    resumed = resume_fixture_pilot(run_id='crash_replay', transport=transport)
+    assert resumed['status'] == 'COMPLETED'
+    assert len(resumed['results']) == 2 and not any(r['created'] for r in resumed['results'])
+    assert len(core.list_leads()) == 2 and len(core.list_tasks()) == 2
+    assert all(len(core.list_lead_observations(lead['id'])) == 1 for lead in core.list_leads())
+    assert core.verify_audit()['valid']
+
+
+@pytest.mark.parametrize('mode', ['revoked', 'manual', 'expired'])
+def test_resume_after_policy_loss_has_zero_reads(mode):
+    source(manual=mode == 'manual', paths=['/listing'])
+    core.create_fixture_run('restart_denied', 'fixture', [LISTING_URL])
+    core.update_fixture_run('restart_denied', 0, 'PAUSED')
+    if mode == 'revoked':
+        with core.founder_session(TOKEN):
+            core.update_source_policy('fixture', 'REVOKED', {},
+                                      'Founder revoked fixture access', actor='founder')
+    elif mode == 'expired':
+        with sqlite3.connect(core.DB_PATH) as db:
+            db.execute("UPDATE source_access_policy SET review_expires_ts='2020-01-01T00:00:00+00:00'")
+    fresh_transport = FixtureTransport({LISTING_URL: CARDS})
+    result = resume_fixture_pilot(run_id='restart_denied', transport=fresh_transport)
+    assert result['status'] == 'BLOCKED' and fresh_transport.reads == []
+    assert not core.list_leads()
+    assert core.verify_audit()['valid']
+
+
+def test_genuine_historical_intake_preserves_ten_sources_and_unknown_status():
+    assert integration.HISTORICAL_FILE.is_file()
+    with pytest.raises(ValueError, match='founder'):
+        import_historical_candidates(run_id='history_denied', founder_token='wrong')
+    first = import_historical_candidates(run_id='history_first', founder_token=TOKEN)
+    assert len(first['results']) == 10 and all(row['created'] for row in first['results'])
+    leads = core.list_leads()
+    assert len(leads) == 10 and len(core.list_tasks()) == 10
+    assert all(lead['source'] == 'web_research_2026-10-10_unverified' and
+               lead['status'] == 'DISCOVERED' and not lead['buyer_verified']
+               for lead in leads)
+    assert any(lead['budget_min'] == 25000 for lead in leads)
+    assert all(obs['availability_status'] == 'UNKNOWN' and
+               obs['verification_status'] == 'UNVERIFIED' and
+               obs['content_evidence_ref'].startswith('historical-file:sha256:')
+               for lead in leads for obs in core.list_lead_observations(lead['id']))
+    repeat = import_historical_candidates(run_id='history_repeat', founder_token=TOKEN)
+    assert len(repeat['results']) == 10 and not any(r['created'] for r in repeat['results'])
+    assert len(core.list_leads()) == 10 and len(core.list_tasks()) == 10
+    assert core.verify_audit()['valid']
+
+
+def test_missing_or_corrupt_genuine_historical_file_fails_loudly(tmp_path, monkeypatch):
+    missing = tmp_path / 'lead_candidates_2026-10-10.json'
+    monkeypatch.setattr(integration, 'HISTORICAL_FILE', missing)
+    with pytest.raises(FileNotFoundError):
+        import_historical_candidates(run_id='missing_history', founder_token=TOKEN)
+    missing.write_text('{broken json', encoding='utf-8')
+    with pytest.raises(json.JSONDecodeError):
+        import_historical_candidates(run_id='corrupt_history', founder_token=TOKEN)
+    assert not core.list_leads()

@@ -30,3 +30,28 @@ Supported automated actions: `official_api`, `feed_read`, `browser_navigation`, 
 API reads and writes (except `/api/health`) require `X-Admin-Token` matching configured `ACQ_ADMIN_TOKEN` of at least 16 characters. If unset, requests fail closed. Core founder-only decisions require the `founder_session(token)` context; an `actor='founder'` string alone grants nothing. CLI founder commands use the same configured token. Do not put the token in audit payloads, URLs, or exception text.
 
 Candidate storage remains `core.add_lead()` with `EXPLICIT_PROJECT` or `POTENTIAL_ACCOUNT`; an extracted candidate stays unverified. Kilo may map its `POTENTIAL_DEMAND` DTO to `POTENTIAL_ACCOUNT` in an adapter. Never mark buyer verification, availability, contact, or payment from extraction alone.
+
+## Fixture collector integration API v1
+
+The integration branch consumes Kilo's public
+`BrowserWorker(policy, fixtures_dir=...)` constructor,
+`configure(allowed_domains=...)`, `navigate(run_id, source_id, url)`, and
+`extract(run_id, source_id, url)` methods. `extract` returns an
+`ExtractionResult` with `candidates`; each candidate must supply its own
+`source_url`, nonempty title and description, and `source_id`. The injected
+policy is `core.CorePolicyPort` or a tracing subclass that delegates each
+decision to it. Navigation and extraction are separate authorized actions.
+
+`acqsys.integration` supplies only an instrumented in-memory fixture
+filesystem through the public `fixtures_dir` argument. It does not call a
+private worker member, implement HTML parsing, or create a network/browser
+transport. The adapter rejects absent fixture reads, empty output,
+out-of-scope candidate URLs and invalid DTOs before central intake, and
+deduplicates candidate URLs. It
+binds each accepted candidate URL to the fixture page SHA-256 for distinct
+local evidence; Kilo's own per-card locator remains required before live
+source activation. Central SQLite stores run cursor/status, leads,
+observations, founder tasks, memory, and the hash-chain audit. Resume reads
+the central source/URL binding and invokes the same public methods with fresh
+core policy checks; Kilo's optional-callback `WorkflowState.resume()` is not
+an authorization path in this integration.

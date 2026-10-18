@@ -314,6 +314,11 @@ def init_db():
             verification_status TEXT NOT NULL DEFAULT 'UNVERIFIED',
             availability_status TEXT NOT NULL DEFAULT 'UNKNOWN', observed_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS fixture_collection_runs (
+            run_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, urls TEXT NOT NULL,
+            cursor INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'READY',
+            updated_at TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS idx_observations_lead ON lead_observations(lead_id);
         CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(status);
         CREATE INDEX IF NOT EXISTS idx_events_target ON events(target_type,target_id);
@@ -434,6 +439,9 @@ def record_candidate_observation(lead_id, run_id, source_id,
             raise ValueError('lead/source mismatch')
         content_ref=_redact(str(content_evidence_ref))
         access_ref=_redact(str(access_evidence_ref))
+        existing=c.execute('SELECT id FROM lead_observations WHERE lead_id=? AND run_id=? AND content_evidence_ref=?',
+                           (lead_id,run_id,content_ref)).fetchone()
+        if existing:return existing['id']
         c.execute('INSERT INTO lead_observations VALUES(?,?,?,?,?,?,?,?,?)',
                   (observation_id,lead_id,run_id,source_id,content_ref,access_ref,
                    'UNVERIFIED','UNKNOWN',now()))
@@ -442,6 +450,52 @@ def record_candidate_observation(lead_id, run_id, source_id,
                 'access_evidence_ref':access_ref,'verification_status':'UNVERIFIED',
                 'availability_status':'UNKNOWN'},run_id)
     return observation_id
+
+
+def fixture_run(run_id):
+    """Read the central checkpoint for a fixture-only acquisition run."""
+    init_db()
+    with _con() as c:
+        row=c.execute('SELECT * FROM fixture_collection_runs WHERE run_id=?',(run_id,)).fetchone()
+    if not row:return None
+    result=dict(row)
+    result['urls']=json.loads(result['urls'])
+    return result
+
+
+def create_fixture_run(run_id,source_id,urls):
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',str(run_id)) or not source_id or \
+       not isinstance(urls,list) or not 1<=len(urls)<=20:
+        raise ValueError('invalid fixture run identity')
+    if any(not isinstance(url,str) or not url or len(url)>2048 for url in urls):
+        raise ValueError('invalid fixture run URLs')
+    with atomic() as c:
+        existing=c.execute('SELECT * FROM fixture_collection_runs WHERE run_id=?',(run_id,)).fetchone()
+        if existing:
+            if existing['source_id']!=source_id or json.loads(existing['urls'])!=urls:
+                raise ValueError('fixture run identity cannot be rebound')
+            return dict(existing)
+        c.execute('INSERT INTO fixture_collection_runs(run_id,source_id,urls,cursor,status,updated_at) '
+                  'VALUES(?,?,?,?,?,?)',(run_id,source_id,dumps(urls),0,'READY',now()))
+        _event(c,'acquisition_agent','FIXTURE_RUN_CREATED','source',source_id,
+               {'run_id':run_id,'url_count':len(urls)},run_id)
+    return fixture_run(run_id)
+
+
+def update_fixture_run(run_id,cursor,status):
+    if status not in ('RUNNING','BLOCKED','COMPLETED','PAUSED') or type(cursor) is not int:
+        raise ValueError('invalid fixture run transition')
+    with atomic() as c:
+        row=c.execute('SELECT * FROM fixture_collection_runs WHERE run_id=?',(run_id,)).fetchone()
+        if not row or cursor<row['cursor'] or cursor>len(json.loads(row['urls'])):
+            raise ValueError('invalid fixture run cursor')
+        if row['status']=='COMPLETED' and status!='COMPLETED':
+            raise ValueError('completed fixture run cannot restart')
+        c.execute('UPDATE fixture_collection_runs SET cursor=?,status=?,updated_at=? WHERE run_id=?',
+                  (cursor,status,now(),run_id))
+        _event(c,'acquisition_agent','FIXTURE_RUN_'+status,'source',row['source_id'],
+               {'run_id':run_id,'cursor':cursor},run_id)
+    return fixture_run(run_id)
 
 
 def list_lead_observations(lead_id):
@@ -540,6 +594,23 @@ def create_task(title,owner='founder',lead_id=None,due_at=None,actor='agent'):
         c.execute('INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?)',(task_id,lead_id,title,owner,'TODO',due_at,ts,ts))
         _event(c,actor,'TASK_CREATED','task',task_id,{'title':title,'owner':owner,'lead_id':lead_id,'due_at':due_at})
     return task_id
+
+
+def ensure_founder_review_task(lead_id,title,actor='acquisition_agent'):
+    """Create one durable review task per lead and title, including after retry."""
+    title=_redact(title)
+    with atomic() as c:
+        if not c.execute('SELECT 1 FROM leads WHERE id=?',(lead_id,)).fetchone():
+            raise ValueError('lead not found')
+        existing=c.execute('SELECT id FROM tasks WHERE lead_id=? AND title=? ORDER BY created_at LIMIT 1',
+                           (lead_id,title)).fetchone()
+        if existing:return existing['id'],False
+        task_id=str(uuid.uuid4());ts=now()
+        c.execute('INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?)',
+                  (task_id,lead_id,title,'founder','TODO',None,ts,ts))
+        _event(c,actor,'TASK_CREATED','task',task_id,
+               {'title':title,'owner':'founder','lead_id':lead_id,'due_at':None})
+    return task_id,True
 
 
 def finish_task(task_id,actor='founder'):

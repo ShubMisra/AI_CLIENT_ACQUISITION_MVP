@@ -18,18 +18,19 @@ def main():
             core.register_source('fixture','fixture.example','Fixture source','MARKETPLACE',actor='founder')
             core.update_source_policy('fixture','CONFIRMED',{
                 'browser_navigation':True,'authenticated_extraction':True,
-                'allowed_paths':['/projects'],'rate_limit_per_hour':20,
+                'allowed_paths':['/listing'],'rate_limit_per_hour':20,
             },'Demo fixture scope only',actor='founder')
             for state in ('EVALUATING','POLICY_REVIEW','AWAITING_FOUNDER',
                           'ONBOARDING','PILOT_READY','PILOT_RUNNING'):
                 core.transition_source('fixture',state,actor='founder')
-        urls=['https://fixture.example/projects/123','https://fixture.example/projects/124']
-        transport=FixtureTransport({
-            urls[0]:'<h1>Document classifier</h1><p>Build a classifier.</p>',
-            urls[1]:'<h1>Forecasting model</h1><p>Build a forecast.</p>',
-        })
-        first=run_fixture_pilot(source_id='fixture',urls=urls,transport=transport,run_id='demo_first')
-        second=run_fixture_pilot(source_id='fixture',urls=urls,transport=transport,run_id='demo_repeat')
+        listing='https://fixture.example/listing/cards.html'
+        transport=FixtureTransport({listing:
+            '<div class="card"><h2>Document classifier</h2><p>Build a classifier.</p>'
+            '<a href="/projects/123">View</a></div>'
+            '<div class="card"><h2>Forecasting model</h2><p>Build a forecast.</p>'
+            '<a href="/projects/124">View</a></div>'})
+        first=run_fixture_pilot(source_id='fixture',urls=[listing],transport=transport,run_id='demo_first')
+        second=run_fixture_pilot(source_id='fixture',urls=[listing],transport=transport,run_id='demo_repeat')
         print(json.dumps({
             'fixture_only':True,
             'new_leads':sum(row.get('created') is True for row in first['results']),
@@ -38,6 +39,7 @@ def main():
             'founder_tasks':len(core.list_tasks()),
             'paying_clients':core.summary()['paying_clients'],
             'audit_valid':core.verify_audit()['valid'],
+            'fixture_reads':len(transport.reads),
         },sort_keys=True))
         # sqlite3 context managers commit but do not close; collect any read
         # connections before Windows removes the temporary database.
