@@ -76,6 +76,7 @@ Founder and Chief Architect review is required before any live activation.
 The [review](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/pull/7#pullrequestreview-5562089579)
 accepted the earlier mock prototype and withheld live-agent and merge approval.
 This follow-up remains mock-only on `feat/supervised-orchestrator`.
+Implementation commit: `15c4696f632af8bf4b5d5c7fbc0d117a27369995`.
 
 - **Trusted CI:** `orchestrator/github.py` now requires workflow ID `381492575`
   and pinned source workflow blob `1f69460e79086f27003ce5270f6958408a67fe23`.
@@ -120,8 +121,11 @@ This follow-up remains mock-only on `feat/supervised-orchestrator`.
   `store.py`, `tests/test_orchestrator.py`,
   `tests/test_orchestrator_cancellation.py`,
   `tests/test_orchestrator_dispatch.py`, and this handoff.
-- New-head push and PR CI links will be added to the PR after this revision is
-  pushed; those checks must pass before independent review.
+- [Push CI](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/actions/runs/39112177073)
+  and [PR CI](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/actions/runs/39112180075)
+  both passed on the exact implementation SHA above. The PR job log reports
+  **88 passed, 1 warning** on Python 3.11.17. The final documentation-only
+  commit is checked separately in the PR before review.
 
 ### Runner environment investigation
 
