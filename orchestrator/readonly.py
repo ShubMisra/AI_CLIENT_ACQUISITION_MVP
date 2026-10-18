@@ -64,9 +64,9 @@ class ReadOnlyPilot:
         tariff = self.tariffs.get((spec.owner, spec.provider, spec.model))
         if not pin or not tariff:
             raise PermissionError('separate owner profile and provider tariff required')
-        if expected_pin and pin.fingerprint() != expected_pin:
+        if expected_pin is not None and pin.fingerprint() != expected_pin:
             raise PermissionError('CLI profile changed after approval')
-        if expected_tariff and digest(asdict(tariff)) != expected_tariff:
+        if expected_tariff is not None and digest(asdict(tariff)) != expected_tariff:
             raise PermissionError('provider price changed after approval')
         if spec.max_input_tokens > tariff.max_input_tokens or \
            spec.max_output_tokens > tariff.max_output_tokens or \

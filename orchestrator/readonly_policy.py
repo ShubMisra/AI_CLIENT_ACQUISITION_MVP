@@ -79,7 +79,9 @@ class ProviderTariff:
                 raise ValueError('invalid provider price') from exc
             if not price.is_finite() or price < 0:
                 raise ValueError('invalid provider price')
-        if not 1 <= self.max_input_tokens <= 10000 or not 1 <= self.max_output_tokens <= 10000:
+        if type(self.max_input_tokens) is not int or type(self.max_output_tokens) is not int or \
+           not 1 <= self.max_input_tokens <= 10000 or \
+           not 1 <= self.max_output_tokens <= 10000:
             raise ValueError('provider hard token limits missing')
 
     def maximum_cost(self, input_tokens: int, output_tokens: int) -> Decimal:

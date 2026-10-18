@@ -148,3 +148,77 @@ The process cancellation primitive has no durable PID ownership across
 service crashes and is not wired to a live runner. The real GitHub publisher,
 scoped credentials, actual model metering, restricted egress and OS isolation
 remain unimplemented. No unattended execution or merge path is active.
+
+## Issue #8 read-only pilot follow-up — 2026-10-18
+
+Implementation commit `afb65947548fcca24f58eb8157ded0349689ccbf`
+continues on `feat/supervised-orchestrator` for [Issue #8](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/issues/8).
+The existing 88 mock-controller tests remain green. PR #7 remains draft,
+targets `feat/codex-p1-integration`, and is not merged.
+
+### Delivery and exact evidence
+
+- `orchestrator/readonly_policy.py` pins per-owner image/CLI and Kilo Node
+  identities, validates one-shot Issue #8 specs and public toy Git fixtures,
+  stages only allowlisted public files, and builds fixed Docker read-only
+  command plans without a shell or host secret mounts.
+- `orchestrator/readonly.py` supplies founder-gated one-use approval,
+  owner/provider caps, preflight probe, source revalidation, strict report
+  and measured-usage validation, mock-only execution, stop/revoke and
+  startup recovery. `execute_live()` denies all calls.
+- `orchestrator/store.py` adds durable approvals and pilot runs, hash-chain
+  events, atomic shared budgets/concurrency, emergency stop and orphan
+  recovery. `orchestrator/policy.py` rejects nonfinite daily costs.
+- `orchestrator/__main__.py` and `web.py` expose the optional local pilot
+  dashboard only when a founder-controlled local profile config is present.
+  No default profile or real backend is configured.
+- `tests/test_orchestrator_readonly.py` covers two owner profiles and toy
+  repositories, malicious fixture content, no secret staging, wrong
+  executable/version/Node/auth/model, missing or expired approval, budget
+  denial, false model output/meter, source drift, child-process stop and
+  timeout, restart recovery, emergency latch and dashboard auth. The manual
+  dry-run workflow now includes these tests. The operating guide and
+  [security risk report](READONLY_PILOT_SECURITY.md) document activation limits.
+
+Local implementation validation: `.\.venv\Scripts\python.exe -m pytest -q`
+reported **109 passed, 1 upstream Starlette/httpx deprecation warning**;
+`compileall` and `git diff --check` passed. At the exact implementation SHA,
+[push CI](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/actions/runs/39115075840)
+and [PR CI](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/actions/runs/39115079191)
+both concluded **success**. The PR job `117639125072` log reports
+**109 passed, 1 warning** on Python 3.11.17. No model credits were used.
+After the final defensive checks and emergency-stop child test, the complete
+local suite reported **110 passed, 1 warning**; `compileall` and
+`git diff --check` remained clean. The final branch-head CI is reported in
+PR #7 after this handoff commit.
+
+Changed files in the implementation commit: `.github/workflows/orchestrator-dry-run.yml`,
+`orchestrator/README.md`, `orchestrator/__main__.py`, `orchestrator/policy.py`,
+`orchestrator/readonly.py`, `orchestrator/readonly_policy.py`,
+`orchestrator/store.py`, `orchestrator/web.py`,
+`tests/test_orchestrator_readonly.py`, and
+`docs/coordination/READONLY_PILOT_SECURITY.md`. This handoff follows as a
+documentation update with small final defensive checks.
+
+### Open issues and integration requirements
+
+Docker CLI 28.3.2 is installed, but the Windows target host's Docker Linux
+engine named pipe was unavailable. The command plan and staged filesystem
+were tested offline; no live container boundary, escape denial, CLI permission
+prompt, provider auth, hard usage meter or actual paid/free model endpoint
+was exercised. The pinned in-container CLI and image digests remain
+founder-supplied configuration, not attested binaries. `--network=none`
+intentionally prevents remote inference. Live Codex/Kilo launch stays
+disabled, including after an approved mock run.
+
+The target shell still resolves Codex to the VS Code extension's
+`0.162.0-alpha.17.2`, whereas a separate environment reported `0.163.0`.
+Kilo `7.8.12` still needs the existing Node `v24.20.0` added to its
+process-local PATH. No installation or persistent PATH change occurred.
+Before any separately authorized live call, the founder and independent
+reviewer must choose a functioning isolation host and pinned image, prove
+real filesystem/egress and process-tree controls, configure separate minimal
+auth plus provider-side hard cost caps, and verify the exact target CLI
+versions and noninteractive permission behavior. GitHub writes remain in
+the separate founder-approved publisher; no pilot GitHub write or merge
+path was added.

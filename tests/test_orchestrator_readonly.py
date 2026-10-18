@@ -269,6 +269,7 @@ def test_snapshot_stages_only_allowlisted_public_files(pilot, monkeypatch):
     backend.hook = inspect
     row = store.pilot_run(service.run_mock(service.approve(specs['codex'], TOKEN), TOKEN))
     assert row['status'] == 'VERIFIED_READ_ONLY'
+    assert b'NEVER_COPY_THIS_SECRET' not in store.settings.db_path.read_bytes()
 
 
 def test_approval_expiry_and_changed_source_rejected_before_admission(pilot):
@@ -342,7 +343,7 @@ def test_atomic_daily_budget_prevents_side_effects(pilot):
         store.set_budgets(100, float('nan'))
 
 
-@pytest.mark.parametrize('mode', ['stop', 'timeout'])
+@pytest.mark.parametrize('mode', ['stop', 'emergency', 'timeout'])
 def test_pilot_child_process_tree_cannot_leave_delayed_effect(pilot, mode):
     service, store, backend, specs, root = pilot
     marker = root / 'delayed-effect.txt'
@@ -358,6 +359,8 @@ def test_pilot_child_process_tree_cannot_leave_delayed_effect(pilot, mode):
                                      **isolated_process_flags())
             if mode == 'stop':
                 service.stop(store.pilot_approval(approval)['used_run_id'], TOKEN)
+            elif mode == 'emergency':
+                service.emergency_stop(TOKEN)
             supervise(child, stop_requested, 0.05 if mode == 'timeout' else 1,
                       poll_seconds=0.01)
             return super().run(plan, facts, stop_requested, timeout_seconds)
@@ -365,7 +368,7 @@ def test_pilot_child_process_tree_cannot_leave_delayed_effect(pilot, mode):
     child_backend = ChildBackend()
     service.backend = child_backend
     row = store.pilot_run(service.run_mock(approval, TOKEN))
-    assert row['status'] == ('STOPPED' if mode == 'stop' else 'FAILED')
+    assert row['status'] == ('FAILED' if mode == 'timeout' else 'STOPPED')
     assert row['error_code'] in ('InterruptedError', 'TimeoutError')
     time.sleep(0.6)
     assert not marker.exists()
