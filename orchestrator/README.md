@@ -94,3 +94,46 @@ Its wrapper invokes `node`, which is missing from this shell's PATH. Node
 `v24.20.0` exists at `C:\Program Files\nodejs\node.exe`; a temporary PATH
 prefix let `kilo.cmd --version` report `7.8.12`. No install, persistent PATH
 change, authentication test or model inference was performed.
+
+## Issue #8 synthetic read-only pilot
+
+The optional `ORCH_PILOT_CONFIG` points to a founder-controlled local JSON
+file with `profiles` (one `RuntimePin` per owner) and `tariffs` (one
+`ProviderTariff` per allowed owner/provider/model). Without this file, pilot
+dashboard endpoints are absent. Each profile pins an absolute Docker client,
+an image digest, the in-image CLI path, CLI SHA-256 and version. Kilo also pins
+its own Node path and version; Codex has no Node setting. The config contains
+no credentials and is never sent to either model. A local test double probes
+the pins; it does not attest a real image or auth state.
+
+The founder registers a complete Issue #8 spec under `/api/pilot/approvals`
+with `issue`, `owner`, `worktree`, `branch`, `source_sha`, `provider`, `model`,
+`max_input_tokens`, `max_output_tokens`, `max_tokens`, `max_cost_usd`,
+`timeout_seconds`, and `expires_at`. The disposable worktree must sit under
+`ORCH_WORKTREE_ROOT`, be clean and pinned to the exact branch/SHA, and contain
+a tracked `public_fixture.txt` plus `.orchestrator-fixture` marker. Only the
+public file and three deterministic facts are staged in a temporary snapshot.
+The approval is one-use and expires within 24 hours. The founder separately
+starts `/api/pilot/approvals/{id}/run-mock`, can revoke the approval or stop
+its run, and can use the emergency stop. Startup recovery stops orphan names
+before marking them `RECOVERY_REQUIRED`; a failed stop latches the global gate.
+
+`run-mock` builds a fixed Docker plan with a pinned image, a read-only
+container and fixture mount, no network, no capabilities, a private temporary
+directory, no host secret mounts, and bounded CPU, memory and process count.
+Codex receives `exec --sandbox read-only --ephemeral --ignore-user-config`;
+Kilo receives `run --pure` and never `--auto`. The selected CLI, Node and PATH
+are independent per owner. The mock backend never launches that plan, Docker,
+Codex, Kilo or a provider call. Real CLI execution always raises
+`PermissionError`. Only exact deterministic public facts and measured mock
+usage pass validation; raw model output is never persisted. Both the old
+controller and pilot share atomic daily budget and concurrency reservations.
+
+Docker Desktop's Linux engine was unavailable in the reviewed Windows shell,
+so the OS restrictions are verified as a command plan and fixture snapshot,
+not as an observed kernel boundary. There is no approved image digest, actual
+in-image CLI hash, provider broker, authenticated model probe or verified live
+cost meter. With `--network=none`, a real remote-model CLI call cannot work;
+that is deliberate while execution remains disabled. An independent review
+and a separately authorized activation change are required before any model
+credit can be spent.

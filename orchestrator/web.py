@@ -6,6 +6,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from .controller import Controller
 from .policy import require_founder
+from .readonly import ReadOnlyPilot
 
 
 PAGE = '''<!doctype html><html lang="en"><meta charset="utf-8">
@@ -38,14 +39,26 @@ pre{white-space:pre-wrap;background:#f3f3f3;padding:1rem}</style>
 <p><button onclick="call('POST','/api/proposals/'+v('proposal')+'/publish')">Create reviewed GitHub issue</button>
 <button onclick="call('POST','/api/proposals/'+v('proposal')+'/reject')">Reject proposal</button></p>
 <details><summary>Register founder-authored task JSON</summary><textarea id="taskjson"></textarea>
-<button onclick="register()">Register</button></details><pre id="out">No action yet.</pre>
+<button onclick="register()">Register</button></details>
+<details><summary>Read-only pilot (mock execution only; requires separate local profile config)</summary>
+<p>One approval permits one synthetic-fixture run. No model process is launched.</p>
+<textarea id="pilotspec" placeholder="Founder-reviewed Issue #8 pilot JSON"></textarea>
+<button onclick="pilotApprove()">Approve pilot</button>
+<label>Approval ID <input id="pilotapproval"></label>
+<button onclick="call('POST','/api/pilot/approvals/'+v('pilotapproval')+'/run-mock')">Run mock</button>
+<button onclick="call('POST','/api/pilot/approvals/'+v('pilotapproval')+'/revoke')">Revoke</button>
+<label>Pilot run ID <input id="pilotrun"></label>
+<button onclick="call('POST','/api/pilot/runs/'+v('pilotrun')+'/stop')">Stop pilot</button>
+<button onclick="call('GET','/api/pilot/runs')">Pilot runs</button></details>
+<pre id="out">No action yet.</pre>
 <script>function v(id){return encodeURIComponent(document.getElementById(id).value)}
 async function call(method,url,body){try{const r=await fetch(url,{method,headers:{'X-Orch-Token':document.getElementById('token').value,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
 document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2)}catch(e){document.getElementById('out').textContent='Request failed'}}
-function register(){try{call('POST','/api/tasks',JSON.parse(document.getElementById('taskjson').value))}catch(e){document.getElementById('out').textContent='Invalid JSON'}}</script></html>'''
+function register(){try{call('POST','/api/tasks',JSON.parse(document.getElementById('taskjson').value))}catch(e){document.getElementById('out').textContent='Invalid JSON'}}
+function pilotApprove(){try{call('POST','/api/pilot/approvals',JSON.parse(document.getElementById('pilotspec').value))}catch(e){document.getElementById('out').textContent='Invalid JSON'}}</script></html>'''
 
 
-def create_app(controller: Controller) -> FastAPI:
+def create_app(controller: Controller, pilot: ReadOnlyPilot | None = None) -> FastAPI:
     app = FastAPI(title='Human-supervised engineering orchestrator')
 
     @app.middleware('http')
@@ -135,7 +148,33 @@ def create_app(controller: Controller) -> FastAPI:
     @app.post('/api/emergency-stop')
     def emergency(request: Request):
         response(controller.emergency_stop, request.headers.get('X-Orch-Token'))
+        if pilot:
+            response(pilot.emergency_stop, request.headers.get('X-Orch-Token'))
         return {'ok': True}
+
+    if pilot:
+        @app.get('/api/pilot/runs')
+        def pilot_runs():
+            return pilot.store.pilot_runs()
+
+        @app.post('/api/pilot/approvals')
+        def pilot_approve(body: dict, request: Request):
+            return {'approval_id': response(pilot.approve, body, request.headers.get('X-Orch-Token'))}
+
+        @app.post('/api/pilot/approvals/{approval_id}/run-mock')
+        def pilot_run(approval_id: str, request: Request):
+            return {'run_id': response(pilot.run_mock, approval_id,
+                                       request.headers.get('X-Orch-Token'))}
+
+        @app.post('/api/pilot/approvals/{approval_id}/revoke')
+        def pilot_revoke(approval_id: str, request: Request):
+            response(pilot.revoke, approval_id, request.headers.get('X-Orch-Token'))
+            return {'ok': True}
+
+        @app.post('/api/pilot/runs/{run_id}/stop')
+        def pilot_stop(run_id: str, request: Request):
+            response(pilot.stop, run_id, request.headers.get('X-Orch-Token'))
+            return {'ok': True}
 
     @app.post('/api/emergency-clear')
     def emergency_clear(request: Request):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -113,7 +114,8 @@ class Settings:
     def validate(self) -> None:
         if self.autonomy not in (Autonomy.OFF, Autonomy.SUPERVISED):
             raise ValueError('only OFF or SUPERVISED is activated')
-        if self.max_active != 2 or self.daily_tokens < 1 or self.daily_cost_usd <= 0:
+        if self.max_active != 2 or self.daily_tokens < 1 or \
+           not math.isfinite(self.daily_cost_usd) or self.daily_cost_usd <= 0:
             raise ValueError('invalid controller limits')
         if not self.root.is_absolute() or not self.founder_login:
             raise ValueError('trusted root and founder login required')

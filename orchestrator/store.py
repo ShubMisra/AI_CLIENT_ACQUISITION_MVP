@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sqlite3
 import uuid
@@ -11,7 +12,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .policy import Settings, Task
+from .policy import Autonomy, Settings, Task
 
 
 def utc() -> str:
@@ -71,6 +72,18 @@ class Store:
             CREATE TABLE IF NOT EXISTS proposals (
                 id TEXT PRIMARY KEY, at TEXT NOT NULL, body TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'PENDING');
+            CREATE TABLE IF NOT EXISTS pilot_approvals (
+                id TEXT PRIMARY KEY, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+                spec TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0,
+                used_run_id TEXT);
+            CREATE TABLE IF NOT EXISTS pilot_runs (
+                id TEXT PRIMARY KEY, approval_id TEXT NOT NULL UNIQUE REFERENCES pilot_approvals(id),
+                owner TEXT NOT NULL, status TEXT NOT NULL, source_sha TEXT NOT NULL,
+                head_sha TEXT, started_at TEXT NOT NULL, finished_at TEXT,
+                reserved_tokens INTEGER NOT NULL, reserved_cost REAL NOT NULL,
+                input_tokens INTEGER, output_tokens INTEGER, charged_cost REAL,
+                report TEXT, report_sha256 TEXT, error_code TEXT,
+                container_name TEXT NOT NULL, stop_requested INTEGER NOT NULL DEFAULT 0);
             ''')
             db.execute("INSERT OR IGNORE INTO settings VALUES('emergency_stop','0')")
             db.execute("INSERT OR IGNORE INTO settings VALUES('daily_tokens',?)",
@@ -166,7 +179,8 @@ class Store:
     def set_budgets(self, tokens: int, cost: float):
         if not isinstance(tokens, int) or isinstance(tokens, bool) or not 1 <= tokens <= 1_000_000:
             raise ValueError('invalid token cap')
-        if not isinstance(cost, (float, int)) or isinstance(cost, bool) or not 0 < cost <= 1000:
+        if not isinstance(cost, (float, int)) or isinstance(cost, bool) or \
+           not math.isfinite(cost) or not 0 < cost <= 1000:
             raise ValueError('invalid cost cap')
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -195,8 +209,9 @@ class Store:
             approved = db.execute('SELECT approved FROM tasks WHERE id=?', (task_id,)).fetchone()
             if not approved or not approved['approved']:
                 raise PermissionError('founder has not approved task')
-            active = db.execute("SELECT owner FROM runs WHERE status='RUNNING'").fetchall()
-            if len(active) >= self.settings.max_active or any(row['owner'] == task.owner for row in active):
+            active = [row['owner'] for row in db.execute("SELECT owner FROM runs WHERE status='RUNNING'")]
+            active += [row['owner'] for row in db.execute("SELECT owner FROM pilot_runs WHERE status='RUNNING'")]
+            if len(active) >= self.settings.max_active or task.owner in active:
                 raise PermissionError('concurrency limit')
             attempts = db.execute('SELECT COUNT(*) n FROM runs WHERE task_id=?', (task_id,)).fetchone()['n']
             if attempts > task.max_retries:
@@ -212,10 +227,13 @@ class Store:
             spent = db.execute('SELECT COALESCE(SUM(reserved_tokens),0) tokens, '
                                'COALESCE(SUM(reserved_cost),0) cost FROM runs WHERE started_at LIKE ?',
                                (today + '%',)).fetchone()
+            pilot_spent = db.execute('SELECT COALESCE(SUM(reserved_tokens),0) tokens, '
+                                     'COALESCE(SUM(reserved_cost),0) cost FROM pilot_runs '
+                                     'WHERE started_at LIKE ?', (today + '%',)).fetchone()
             caps = {row['key']: float(row['value']) for row in db.execute(
                 "SELECT key,value FROM settings WHERE key IN ('daily_tokens','daily_cost_usd')")}
-            if spent['tokens'] + task.max_tokens > caps['daily_tokens'] or \
-               spent['cost'] + task.max_cost_usd > caps['daily_cost_usd']:
+            if spent['tokens'] + pilot_spent['tokens'] + task.max_tokens > caps['daily_tokens'] or \
+               spent['cost'] + pilot_spent['cost'] + task.max_cost_usd > caps['daily_cost_usd']:
                 raise PermissionError('daily budget exceeded')
             db.execute('INSERT INTO runs(id,task_id,owner,status,mode,source_sha,started_at,reserved_tokens,reserved_cost) '
                        'VALUES(?,?,?,?,?,?,?,?,?)',
@@ -321,12 +339,17 @@ class Store:
             if emergency:
                 db.execute("UPDATE settings SET value='1' WHERE key='emergency_stop'")
                 db.execute("UPDATE runs SET stop_requested=1 WHERE status='RUNNING'")
+                db.execute("UPDATE pilot_runs SET stop_requested=1 WHERE status='RUNNING'")
             else:
                 db.execute('UPDATE runs SET stop_requested=1 WHERE id=? AND status=\'RUNNING\'', (run_id,))
             self._event(db, 'EMERGENCY_STOP' if emergency else 'STOP_REQUESTED', {}, run_id)
 
     def clear_emergency(self):
         with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute("SELECT 1 FROM pilot_runs WHERE status='RUNNING' LIMIT 1").fetchone() or \
+               db.execute("SELECT 1 FROM runs WHERE status='RUNNING' LIMIT 1").fetchone():
+                raise PermissionError('active run must be recovered before clearing stop')
             db.execute("UPDATE settings SET value='0' WHERE key='emergency_stop'")
             self._event(db, 'EMERGENCY_CLEARED', {})
 
@@ -364,3 +387,153 @@ class Store:
             if not db.total_changes:
                 raise ValueError('proposal not pending')
             self._event(db, 'PROPOSAL_' + status, {'proposal_id': proposal_id})
+
+    def pilot_approve(self, spec: dict) -> str:
+        approval_id = str(uuid.uuid4())
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute('INSERT INTO pilot_approvals(id,created_at,expires_at,spec) VALUES(?,?,?,?)',
+                       (approval_id, utc(), spec['expires_at'], compact(spec)))
+            self._event(db, 'PILOT_APPROVED', {'approval_id': approval_id,
+                                               'owner': spec['owner'],
+                                               'source_sha': spec['source_sha'],
+                                               'provider': spec['provider'],
+                                               'model': spec['model'],
+                                               'expires_at': spec['expires_at']})
+        return approval_id
+
+    def pilot_approval(self, approval_id: str) -> dict:
+        with self._db() as db:
+            row = db.execute('SELECT * FROM pilot_approvals WHERE id=?',
+                             (approval_id,)).fetchone()
+        if not row:
+            raise ValueError('pilot approval not found')
+        result = dict(row)
+        result['spec'] = json.loads(result['spec'])
+        return result
+
+    def pilot_revoke(self, approval_id: str) -> str | None:
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT used_run_id FROM pilot_approvals WHERE id=?',
+                             (approval_id,)).fetchone()
+            if not row:
+                raise ValueError('pilot approval not found')
+            db.execute('UPDATE pilot_approvals SET revoked=1 WHERE id=?', (approval_id,))
+            if row['used_run_id']:
+                db.execute("UPDATE pilot_runs SET stop_requested=1 WHERE id=? AND status='RUNNING'",
+                           (row['used_run_id'],))
+            self._event(db, 'PILOT_REVOKED', {'approval_id': approval_id}, row['used_run_id'])
+        return row['used_run_id']
+
+    def pilot_admit(self, approval_id: str) -> str:
+        if self.settings.autonomy != Autonomy.SUPERVISED or not self.settings.mock_only:
+            raise PermissionError('pilot requires supervised mock mode')
+        run_id = str(uuid.uuid4())
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT * FROM pilot_approvals WHERE id=?',
+                             (approval_id,)).fetchone()
+            if not row:
+                raise ValueError('pilot approval not found')
+            spec = json.loads(row['spec'])
+            expiry = datetime.fromisoformat(row['expires_at'].replace('Z', '+00:00'))
+            if row['revoked'] or row['used_run_id'] or expiry <= datetime.now(timezone.utc):
+                raise PermissionError('pilot approval revoked, used or expired')
+            if db.execute("SELECT value FROM settings WHERE key='emergency_stop'").fetchone()['value'] != '0':
+                raise PermissionError('emergency stop active')
+            active = [x['owner'] for x in db.execute("SELECT owner FROM runs WHERE status='RUNNING'")]
+            active += [x['owner'] for x in db.execute("SELECT owner FROM pilot_runs WHERE status='RUNNING'")]
+            if len(active) >= self.settings.max_active or spec['owner'] in active:
+                raise PermissionError('pilot concurrency limit')
+            today = datetime.now(timezone.utc).date().isoformat() + '%'
+            normal = db.execute('SELECT COALESCE(SUM(reserved_tokens),0) tokens, '
+                                'COALESCE(SUM(reserved_cost),0) cost FROM runs WHERE started_at LIKE ?',
+                                (today,)).fetchone()
+            prior = db.execute('SELECT COALESCE(SUM(reserved_tokens),0) tokens, '
+                               'COALESCE(SUM(reserved_cost),0) cost FROM pilot_runs WHERE started_at LIKE ?',
+                               (today,)).fetchone()
+            caps = {x['key']: float(x['value']) for x in db.execute(
+                "SELECT key,value FROM settings WHERE key IN ('daily_tokens','daily_cost_usd')")}
+            if normal['tokens'] + prior['tokens'] + spec['max_tokens'] > caps['daily_tokens'] or \
+               normal['cost'] + prior['cost'] + spec['max_cost_usd'] > caps['daily_cost_usd']:
+                raise PermissionError('pilot daily budget exceeded')
+            name = 'orch-ro-' + run_id.replace('-', '')
+            db.execute('INSERT INTO pilot_runs(id,approval_id,owner,status,source_sha,started_at,'
+                       'reserved_tokens,reserved_cost,container_name) VALUES(?,?,?,?,?,?,?,?,?)',
+                       (run_id, approval_id, spec['owner'], 'RUNNING', spec['source_sha'],
+                        utc(), spec['max_tokens'], spec['max_cost_usd'], name))
+            db.execute('UPDATE pilot_approvals SET used_run_id=? WHERE id=?',
+                       (run_id, approval_id))
+            self._event(db, 'PILOT_ADMITTED', {'approval_id': approval_id,
+                                               'owner': spec['owner'],
+                                               'source_sha': spec['source_sha'],
+                                               'reserved_tokens': spec['max_tokens'],
+                                               'reserved_cost': spec['max_cost_usd'],
+                                               'container_name': name}, run_id)
+        return run_id
+
+    def pilot_run(self, run_id: str) -> dict:
+        with self._db() as db:
+            row = db.execute('SELECT * FROM pilot_runs WHERE id=?', (run_id,)).fetchone()
+        if not row:
+            raise ValueError('pilot run not found')
+        return dict(row)
+
+    def pilot_runs(self) -> list[dict]:
+        with self._db() as db:
+            return [dict(row) for row in db.execute(
+                'SELECT * FROM pilot_runs ORDER BY started_at DESC LIMIT 100').fetchall()]
+
+    def pilot_finish(self, run_id: str, status: str, head_sha: str | None,
+                     input_tokens: int | None, output_tokens: int | None,
+                     charged_cost: float | None, report: dict | None,
+                     report_sha256: str | None, error_code: str | None):
+        if status not in ('VERIFIED_READ_ONLY', 'FAILED', 'STOPPED'):
+            raise ValueError('invalid pilot result')
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT * FROM pilot_runs WHERE id=?', (run_id,)).fetchone()
+            if not row or row['status'] != 'RUNNING':
+                raise ValueError('pilot run not active')
+            if row['stop_requested']:
+                status = 'STOPPED'
+            if status == 'VERIFIED_READ_ONLY' and (input_tokens is None or output_tokens is None or
+                    charged_cost is None or report is None or head_sha != row['source_sha'] or
+                    input_tokens < 0 or output_tokens < 0 or charged_cost < 0 or
+                    input_tokens + output_tokens > row['reserved_tokens'] or
+                    charged_cost > row['reserved_cost']):
+                status = 'FAILED'
+                error_code = 'METER_OR_HEAD_INVALID'
+            db.execute('UPDATE pilot_runs SET status=?,head_sha=?,finished_at=?,input_tokens=?, '
+                       'output_tokens=?,charged_cost=?,report=?,report_sha256=?,error_code=? WHERE id=?',
+                       (status, head_sha, utc(), input_tokens, output_tokens,
+                        charged_cost, compact(report) if report else None,
+                        report_sha256, error_code, run_id))
+            self._event(db, 'PILOT_FINISHED', {'status': status, 'head_sha': head_sha,
+                                               'input_tokens': input_tokens,
+                                               'output_tokens': output_tokens,
+                                               'charged_cost': charged_cost,
+                                               'error_code': error_code}, run_id)
+
+    def pilot_stop(self, run_id: str):
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute("UPDATE pilot_runs SET stop_requested=1 WHERE id=? AND status='RUNNING'",
+                       (run_id,))
+            self._event(db, 'PILOT_STOP_REQUESTED', {}, run_id)
+
+    def pilot_orphans(self) -> list[dict]:
+        with self._db() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT id,container_name FROM pilot_runs WHERE status='RUNNING'").fetchall()]
+
+    def pilot_mark_recovered(self, run_id: str):
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            changed = db.execute("UPDATE pilot_runs SET status='RECOVERY_REQUIRED',stop_requested=1,"
+                                 "finished_at=? WHERE id=? AND status='RUNNING'",
+                                 (utc(), run_id)).rowcount
+            if changed:
+                self._event(db, 'PILOT_RECOVERED', {'result': 'RECOVERY_REQUIRED'}, run_id)
+        return bool(changed)
