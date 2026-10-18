@@ -118,6 +118,18 @@ class Store:
             prev = digest
         return True
 
+    def recover(self) -> int:
+        """On restart, fail closed on orphaned mock runs; retain reservations."""
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            stale = db.execute("SELECT id,source_sha FROM runs WHERE status='RUNNING'").fetchall()
+            for row in stale:
+                db.execute("UPDATE runs SET status='RECOVERY_REQUIRED',stop_requested=1,finished_at=? "
+                           "WHERE id=? AND status='RUNNING'", (utc(), row['id']))
+                self._event(db, 'RUN_RECOVERED', {'source_sha': row['source_sha'],
+                                                  'result': 'RECOVERY_REQUIRED'}, row['id'])
+        return len(stale)
+
     def add_task(self, task: Task) -> str:
         task.validate()
         task_id = str(uuid.uuid4())
@@ -240,6 +252,12 @@ class Store:
             db.execute('INSERT INTO checkpoints(run_id,at,stage,payload) VALUES(?,?,?,?)',
                        (run_id, utc(), stage, safe))
             self._event(db, 'CHECKPOINT', {'stage': stage}, run_id)
+
+    def latest_checkpoint(self, run_id: str, stage: str) -> dict | None:
+        with self._db() as db:
+            row = db.execute('SELECT payload FROM checkpoints WHERE run_id=? AND stage=? '
+                             'ORDER BY id DESC LIMIT 1', (run_id, stage)).fetchone()
+        return json.loads(row['payload']) if row else None
 
     def finish(self, run_id: str, status: str, head_sha: str | None,
                used_tokens: int | None, used_cost: float | None, ci_state: str):

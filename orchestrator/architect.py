@@ -23,13 +23,16 @@ class OpenAIArchitect:
         key = os.getenv('OPENAI_API_KEY', '')
         if not key:
             raise PermissionError('OpenAI API key unavailable')
-        if self.budget_guard is None or not self.budget_guard(12000):
-            raise PermissionError('Chief Architect API budget not approved')
         instructions = self.instructions_path.read_text(encoding='utf-8')
         if len(instructions) > 12000:
             raise ValueError('instructions too large')
+        review_input = compact(redact(evidence))
+        if len(review_input.encode('utf-8')) > 24000:
+            raise PermissionError('complete review evidence exceeds API budget')
+        if self.budget_guard is None or not self.budget_guard(26000):
+            raise PermissionError('Chief Architect API budget not approved')
         payload = {'model': self.model, 'instructions': instructions,
-                   'input': compact(redact(evidence))[:8000],
+                   'input': review_input,
                    'max_output_tokens': 1200, 'store': False, 'tools': []}
         req = Request('https://api.openai.com/v1/responses',
                       data=json.dumps(payload).encode(), method='POST',
@@ -52,6 +55,11 @@ class OpenAIArchitect:
 
 class MockArchitect:
     def review(self, evidence: dict) -> dict:
-        decision = 'ACCEPT' if evidence.get('ci_state') == 'SUCCESS' and evidence.get('scope_valid') else 'REJECT'
+        decision = 'ACCEPT' if evidence.get('ci', {}).get('state') == 'SUCCESS' and \
+                   evidence.get('scope_valid') and evidence.get('patch') and \
+                   evidence.get('acceptance', {}).get('passed') and \
+                   evidence.get('audit_valid') and evidence.get('security_passed') and not any(
+                       item.get('severity') in ('HIGH', 'REVIEW') for item in evidence.get('security_findings', [])) \
+                   else 'REJECT'
         return {'decision': decision, 'reason': 'Fixture review from independent evidence',
                 'next_task': None, 'usage': {'total_tokens': 0}}

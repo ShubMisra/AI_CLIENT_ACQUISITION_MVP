@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .policy import Autonomy, Task, Settings, require_founder, validate_issue, validate_worktree
@@ -16,6 +17,7 @@ class Controller:
         settings.validate()
         self.settings, self.store, self.github = settings, store, github
         self.architect, self.runners, self.verifier, self.git = architect, runners, verifier, git
+        self.store.recover()
 
     def register(self, task_data: dict, founder_token: str) -> str:
         require_founder(founder_token)
@@ -72,19 +74,21 @@ class Controller:
             if result.tokens is None or result.cost_usd is None or result.tokens > task.max_tokens or \
                result.cost_usd > task.max_cost_usd:
                 raise PermissionError('usage missing or exceeds run budget')
-            changed = self.verifier.check(task, result.head_sha)
-            self.store.checkpoint(run_id, 'SCOPE_VERIFIED', {'changed_paths': changed})
-            ci = self.github.ci_evidence(result.head_sha)
+            evidence = self.verifier.collect(task, result.head_sha)
+            self.store.checkpoint(run_id, 'REVIEW_EVIDENCE', evidence)
+            if not evidence['acceptance']['passed'] or not evidence['security_passed']:
+                raise PermissionError('acceptance or security checks failed')
+            ci = self.github.ci_evidence(result.head_sha, task.branch, task.source_sha)
             ci_state = ci['state']
             observed_ci = ci_state
             self.store.checkpoint(run_id, 'CI_OBSERVED', ci)
-            if ci_state == 'FAILED' or ci_state == 'MISSING':
-                raise RuntimeError('independent CI failed or missing')
+            if ci_state == 'FAILED':
+                raise RuntimeError('independent CI failed')
             status = 'AWAITING_REVIEW' if ci_state == 'SUCCESS' else 'WAITING_CI'
             self.store.finish(run_id, status, result.head_sha, result.tokens,
                               result.cost_usd, ci_state)
             if self.store.run(run_id)['status'] == 'AWAITING_REVIEW':
-                self._architect_review(run_id, task, changed)
+                self._architect_review(run_id, task, evidence, ci)
         except Exception as exc:
             self.store.log(run_id, type(exc).__name__)
             if self.store.run(run_id)['status'] == 'RUNNING':
@@ -93,13 +97,12 @@ class Controller:
             self.store.event('RUN_ERROR', {'error_type': type(exc).__name__}, run_id)
         return run_id
 
-    def _architect_review(self, run_id: str, task: Task, changed: list[str]):
+    def _architect_review(self, run_id: str, task: Task, evidence: dict, ci: dict):
         row = self.store.run(run_id)
-        evidence = {'issue': task.issue, 'owner': task.owner, 'source_sha': task.source_sha,
-                    'head_sha': row['head_sha'], 'changed_paths': changed,
-                    'scope_valid': True, 'ci_state': row['ci_state'],
-                    'acceptance': task.acceptance, 'audit_valid': self.store.verify_events()}
-        result = self.architect.review(evidence)
+        packet = {'issue': task.issue, 'owner': task.owner, 'source_sha': task.source_sha,
+                  'head_sha': row['head_sha'], 'ci': ci, 'scope_valid': True,
+                  'audit_valid': self.store.verify_events(), **evidence}
+        result = self.architect.review(packet)
         self.store.decide(run_id, 'chief_architect', result['decision'], result['reason'])
         if result.get('next_task'):
             self.store.add_proposal(result['next_task'])
@@ -108,16 +111,31 @@ class Controller:
         row = self.store.run(run_id)
         if row['status'] != 'WAITING_CI':
             return row
-        ci = self.github.ci_evidence(row['head_sha'])
+        task, approved = self.store.task(row['task_id'])
+        if not approved:
+            raise PermissionError('task approval revoked')
+        if datetime.fromisoformat(task.deadline_utc.replace('Z', '+00:00')) <= datetime.now(timezone.utc):
+            self.store.update_ci(run_id, 'EXPIRED', 'FAILED')
+            return self.store.run(run_id)
+        validate_issue(task, self.github.issue(task.issue), self.settings.founder_login)
+        remote_sha = self.github.branch_sha(task.branch)
+        if remote_sha not in (task.source_sha, row['head_sha']):
+            raise PermissionError('result branch moved')
+        evidence = self.verifier.collect(task, row['head_sha'])
+        if not evidence['acceptance']['passed'] or not evidence['security_passed']:
+            self.store.update_ci(run_id, 'FAILED', 'FAILED')
+            return self.store.run(run_id)
+        ci = self.github.ci_evidence(row['head_sha'], task.branch, task.source_sha)
         ci_state = ci['state']
         self.store.checkpoint(run_id, 'CI_OBSERVED', ci)
-        if ci_state in ('FAILED', 'MISSING'):
+        if ci_state == 'FAILED':
             self.store.update_ci(run_id, ci_state, 'FAILED')
         elif ci_state == 'SUCCESS':
+            if remote_sha != row['head_sha']:
+                raise PermissionError('successful CI is not on the remote result branch')
             self.store.update_ci(run_id, ci_state, 'AWAITING_REVIEW')
-            task, _ = self.store.task(row['task_id'])
-            changed = self.verifier.check(task, row['head_sha'])
-            self._architect_review(run_id, task, changed)
+            self.store.checkpoint(run_id, 'REVIEW_EVIDENCE', evidence)
+            self._architect_review(run_id, task, evidence, ci)
         return self.store.run(run_id)
 
     def publish(self, run_id: str, founder_token: str) -> str:
@@ -130,12 +148,32 @@ class Controller:
         if not architect_decisions or architect_decisions[-1]['decision'] != 'ACCEPT' or \
            any(d['actor'] == 'founder' and d['decision'] == 'REJECT' for d in decisions):
             raise PermissionError('independent review did not accept')
-        task, _ = self.store.task(row['task_id'])
+        task, approved = self.store.task(row['task_id'])
+        if not approved:
+            raise PermissionError('task approval revoked')
+        task.validate()
+        validate_issue(task, self.github.issue(task.issue), self.settings.founder_login)
         if self.github.branch_sha(task.branch) != row['head_sha']:
             raise PermissionError('remote result SHA changed')
+        evidence = self.verifier.collect(task, row['head_sha'])
+        previous = self.store.latest_checkpoint(run_id, 'REVIEW_EVIDENCE')
+        if not previous or not evidence['acceptance']['passed'] or not evidence['security_passed'] or \
+           evidence['patch_sha256'] != previous['patch_sha256']:
+            raise PermissionError('review evidence stale or acceptance failed')
+        ci = self.github.ci_evidence(row['head_sha'], task.branch, task.source_sha)
+        last_ci = self.store.latest_checkpoint(run_id, 'CI_OBSERVED')
+        if ci['state'] != 'SUCCESS' or not last_ci or \
+           ci.get('run_id') != last_ci.get('run_id') or \
+           ci.get('workflow_blob_sha') != last_ci.get('workflow_blob_sha'):
+            raise PermissionError('trusted CI evidence changed')
+        self.store.checkpoint(run_id, 'PUBLICATION_REVALIDATED',
+                              {'patch_sha256': evidence['patch_sha256'], 'ci': ci,
+                               'acceptance': evidence['acceptance']})
         body = ('Draft engineering review only. No automatic merge.\n\n'
                 'Issue: #' + str(task.issue) + '\nSource SHA: ' + task.source_sha +
-                '\nResult SHA: ' + row['head_sha'] + '\nCI: SUCCESS\n')
+                '\nResult SHA: ' + row['head_sha'] + '\nCI: SUCCESS\n' +
+                'Patch SHA-256: ' + evidence['patch_sha256'] + '\n' +
+                'Acceptance tests: ' + ', '.join(task.acceptance) + '\n')
         pr = self.github.create_draft_pr('Engineering result for #' + str(task.issue),
                                           task.branch, 'main', body)
         url = pr['html_url']

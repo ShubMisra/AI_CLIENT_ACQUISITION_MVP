@@ -70,3 +70,77 @@ process cancellation and Kilo permissions review. The current dashboard is
 local-only and the SQLite hash chain cannot resist privileged DB replacement.
 Free-form log redaction is limited. No unattended mode or merge path exists.
 Founder and Chief Architect review is required before any live activation.
+
+## Follow-up to Chief Architect review 5562089579
+
+The [review](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/pull/7#pullrequestreview-5562089579)
+accepted the earlier mock prototype and withheld live-agent and merge approval.
+This follow-up remains mock-only on `feat/supervised-orchestrator`.
+
+- **Trusted CI:** `orchestrator/github.py` now requires workflow ID `381492575`
+  and pinned source workflow blob `1f69460e79086f27003ce5270f6958408a67fe23`.
+  It checks repository, branch, exact result SHA, push event, workflow path,
+  workflow run and the single `test` job. Missing CI waits until task deadline;
+  changed workflow identity or failed CI cannot pass.
+- **Independent evidence:** `orchestrator/runners.py` supplies the actual
+  bounded patch and SHA-256, changed paths, per-file findings and selected
+  pytest outcomes from a marked disposable fixture. Sensitive added lines are
+  redacted and block review. Selected acceptance test files cannot change in
+  the candidate commit. `orchestrator/architect.py` receives the complete
+  packet or declines an oversized request. Review instructions were updated.
+- **Publication:** `orchestrator/controller.py` repeats local approval, issue
+  state/author/label, branch, patch, selected tests, workflow and exact CI-run
+  checks immediately before founder-approved draft PR creation.
+- **Recovery and cancellation:** `orchestrator/store.py` idempotently converts
+  orphaned `RUNNING` rows to audited `RECOVERY_REQUIRED` with reservations
+  retained. `orchestrator/cancellation.py` provides a tested process-tree
+  stop/deadline primitive, disconnected from the disabled live executor.
+- **Disposable dispatch:** `tests/test_orchestrator_dispatch.py` creates an
+  isolated working Git repository and bare remote, routes a founder-approved
+  issue through production GitHub gateway methods with mocked HTTP responses,
+  waits for an actual toy branch push, verifies trusted CI, reviews evidence,
+  and publishes only a mocked draft PR. No real GitHub task or model is run.
+  `tests/test_orchestrator_cancellation.py` exercises child-process stop and
+  timeout. `tests/test_orchestrator.py` adds revocation, CI spoof, audit,
+  patch and failing-acceptance cases. The manual dry-run workflow includes
+  all orchestrator test files.
+
+### Verification for this follow-up
+
+- Full local regression: `.\.venv\Scripts\python.exe -m pytest -q` **88 passed,
+  1 upstream Starlette/httpx deprecation warning**. `compileall` and
+  `git diff --check` passed.
+- A read-only call through the new `GitHubGateway.ci_evidence()` returned
+  `SUCCESS` for the previous exact PR head `8d30f401263d8c94079131baf0d89d3b4bb4cc40`,
+  trusted workflow ID `381492575`, blob SHA `1f69460e79086f27003ce5270f6958408a67fe23`,
+  push run `39110622324` and job `117625802740`. No GitHub write was made.
+- Changed files: `.github/workflows/orchestrator-dry-run.yml`,
+  `orchestrator/README.md`, `__main__.py`, `architect.py`, `cancellation.py`,
+  `controller.py`, `github.py`, `instructions/chief_architect.md`, `runners.py`,
+  `store.py`, `tests/test_orchestrator.py`,
+  `tests/test_orchestrator_cancellation.py`,
+  `tests/test_orchestrator_dispatch.py`, and this handoff.
+- New-head push and PR CI links will be added to the PR after this revision is
+  pushed; those checks must pass before independent review.
+
+### Runner environment investigation
+
+`codex` resolves only to
+`C:\Users\PC\.vscode\extensions\openai.chatgpt-26.1007.21434-win32-x64\bin\windows-x86_64\codex.exe`
+in this PowerShell shell and reports `codex-cli 0.162.0-alpha.17.2`, not the
+reported `0.163.0`. `kilo.cmd` at `C:\Users\PC\AppData\Roaming\npm\kilo.cmd`
+is package version `7.8.12`, but its wrapper invokes `node`, which is absent
+from this shell's PATH. `C:\Program Files\nodejs\node.exe` exists and reports
+`v24.20.0`; a temporary, process-local PATH prefix made `kilo.cmd --version`
+report `7.8.12`. No installation, persistent environment change, model call
+or authentication test occurred. Before any future live activation, the
+founder must choose and pin the intended CLI binaries and restricted runtime.
+
+### Remaining activation limits
+
+Selected pytest tests are executable code and are run only in marked toy
+repositories; the marker and scrubbed environment are not an OS sandbox.
+The process cancellation primitive has no durable PID ownership across
+service crashes and is not wired to a live runner. The real GitHub publisher,
+scoped credentials, actual model metering, restricted egress and OS isolation
+remain unimplemented. No unattended execution or merge path is active.

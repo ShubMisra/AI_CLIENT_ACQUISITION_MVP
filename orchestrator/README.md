@@ -32,6 +32,28 @@ publication. `python -m pytest -q tests/test_orchestrator.py` demonstrates the
 entire offline cycle with fake GitHub and model interfaces. The optional
 `Supervised orchestrator dry run` GitHub workflow runs only this mock suite.
 
+The CI gateway pins GitHub Actions workflow ID `381492575`, the Git blob SHA
+`1f69460e79086f27003ce5270f6958408a67fe23` for
+`.github/workflows/ci.yml`, repository/ref, exact result SHA, push event,
+workflow run and its single `test` job. A changed workflow or check identity
+fails closed. A missing run waits until the task deadline; it never grants
+review or publication. The selected pytest node IDs run only inside a marked
+disposable fixture repository, with a scrubbed environment. Their output,
+actual bounded patch, patch hash and per-file security findings are included
+in review evidence. Sensitive added lines are redacted and block review.
+The selected acceptance test files must remain unchanged from the reviewed
+source SHA, even if the task's path scope otherwise includes `tests/`.
+The API reviewer receives complete bounded evidence or declines the call;
+it never receives a truncated review packet.
+
+At publication, the controller rechecks founder approval, issue state/author/
+label, branch head, local patch, selected tests, workflow blob and exact CI run.
+On service restart, orphaned `RUNNING` mock rows become `RECOVERY_REQUIRED`,
+retain their budget reservation, and are audited once. A founder must create
+or approve a new bounded task to continue. The process-tree cancellation
+primitive in `cancellation.py` is tested with harmless child processes; it is
+not connected to the disabled live CLI executor.
+
 ## Controls and activation boundary
 
 Four levels are named: `OFF`, `SUPERVISED`, `APPROVED_BATCH`, `UNATTENDED`.
@@ -60,3 +82,15 @@ Logs and events are redacted and hash-chained, but regex redaction is not a
 complete confidentiality boundary. Do not place repository secrets in a
 worktree exposed to a free third-party model. SQLite history is tamper-evident
 against row edits, not privileged database replacement.
+
+## Runner environment observed on 2026-10-18
+
+This PowerShell runner resolves `codex.exe` from the VS Code extension at
+`C:\Users\PC\.vscode\extensions\openai.chatgpt-26.1007.21434-win32-x64\bin\windows-x86_64\codex.exe`;
+it reports `codex-cli 0.162.0-alpha.17.2`. The separately reported `0.163.0`
+binary is not on this shell's PATH. `kilo.cmd` is installed at
+`C:\Users\PC\AppData\Roaming\npm\kilo.cmd` and its package reports `7.8.12`.
+Its wrapper invokes `node`, which is missing from this shell's PATH. Node
+`v24.20.0` exists at `C:\Program Files\nodejs\node.exe`; a temporary PATH
+prefix let `kilo.cmd --version` report `7.8.12`. No install, persistent PATH
+change, authentication test or model inference was performed.

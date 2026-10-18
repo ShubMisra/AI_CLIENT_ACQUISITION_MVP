@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .architect import MockArchitect
 from .controller import Controller
-from .github import GitHubGateway
+from .github import CITrust, GitHubGateway
 from .policy import Autonomy, Settings
 from .runners import FixtureCommitRunner, GitReader, Verifier
 from .store import Store
@@ -19,7 +19,8 @@ def build_controller() -> Controller:
     settings = Settings(root, db_path, os.getenv('ORCH_FOUNDER_LOGIN', 'ShubMisra'),
                         autonomy=Autonomy(os.getenv('ORCH_AUTONOMY', 'SUPERVISED')))
     store, git = Store(settings), GitReader()
-    return Controller(settings, store, GitHubGateway(), MockArchitect(),
+    ci = CITrust(381492575, '1f69460e79086f27003ce5270f6958408a67fe23')
+    return Controller(settings, store, GitHubGateway(ci_trust=ci), MockArchitect(),
                       {'codex': FixtureCommitRunner('codex'),
                        'kilo': FixtureCommitRunner('kilo')}, Verifier(git), git)
 
