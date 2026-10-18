@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from .policy import AccessDecision, PolicyPort
 
@@ -105,23 +105,30 @@ class BrowserWorker:
         parsed = urlparse(url)
         evidence_refs: List[str] = [f"fixture:{parsed.path or parsed.netloc}", f"url:{url}"]
 
-        card_titles = re.findall(r"<h[12][^>]*>(.*?)</h[12]>", html, re.IGNORECASE | re.DOTALL)
-        card_paras = re.findall(r"<p[^>]*>(.*?)</p>", html, re.IGNORECASE | re.DOTALL)
+        card_blocks = re.findall(r"<div[^>]*class=['\"][^'\"]*card[^'\"]*['\"][^>]*>(.*?)</div>", html, re.IGNORECASE | re.DOTALL)
+        if len(card_blocks) < 2:
+            card_blocks = re.findall(r"<div[^>]*>(.*?)</div>", html, re.IGNORECASE | re.DOTALL)
 
-        if len(card_titles) >= 2:
-            for i in range(min(2, len(card_titles))):
-                title = re.sub(r"<[^>]+>", " ", card_titles[i]).strip()
+        if len(card_blocks) >= 2:
+            for i in range(min(2, len(card_blocks))):
+                block = card_blocks[i]
+                m = re.search(r"<h[12][^>]*>(.*?)</h[12]>", block, re.IGNORECASE | re.DOTALL)
+                title = re.sub(r"<[^>]+>", " ", m.group(1)).strip() if m else f"card-{i+1}"
                 title = re.sub(r"\s+", " ", title)
+                mp = re.search(r"<p[^>]*>(.*?)</p>", block, re.IGNORECASE | re.DOTALL)
                 desc = None
-                if i < len(card_paras):
-                    desc = re.sub(r"<[^>]+>", " ", card_paras[i]).strip()
+                if mp:
+                    desc = re.sub(r"<[^>]+>", " ", mp.group(1)).strip()
                     desc = re.sub(r"\s+", " ", desc)
                     if len(desc) > 400:
                         desc = desc[:400]
+                ma = re.search(r"<a[^>]*href=['\"]([^'\"]+)['\"]", block, re.IGNORECASE)
+                card_url = ma.group(1) if ma else url
+                card_url = urljoin(url, card_url)
                 cand = {
                     "source_id": source_id,
-                    "source_url": url,
-                    "title": title or f"card-{i+1}",
+                    "source_url": card_url,
+                    "title": title,
                     "description": desc,
                     "demand_type": "EXPLICIT_PROJECT",
                     "verification_status": "UNVERIFIED",

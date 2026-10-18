@@ -58,7 +58,14 @@ class WorkflowState:
         self._persist_atomic()
         return dict(self._state)
 
-    def resume(self, run_id: str | None = None) -> Dict[str, Any]:
+    def resume(self, run_id: str | None = None, policy_check: Any = None) -> Dict[str, Any]:
+        if policy_check is not None:
+            try:
+                res = policy_check()
+                if not res:
+                    raise PermissionError("policy_check_failed")
+            except Exception:
+                raise PermissionError("policy_check_failed")
         if run_id:
             self._state["run_id"] = run_id
         self._state["status"] = "RUNNING"
@@ -71,11 +78,17 @@ class WorkflowState:
         try:
             self._persist_atomic()
         except Exception as e:
-            # surface persistence failure clearly
             raise RuntimeError(f"checkpoint_persist_failed: {e}") from e
         return cp
 
-    def restore(self, cp_id: str | None = None) -> Optional[Checkpoint]:
+    def restore(self, cp_id: str | None = None, policy_check: Any = None) -> Optional[Checkpoint]:
+        if policy_check is not None:
+            try:
+                res = policy_check()
+                if not res:
+                    raise PermissionError("policy_check_failed")
+            except Exception:
+                raise PermissionError("policy_check_failed")
         if cp_id:
             for c in reversed(self._checkpoints):
                 if c.cp_id == cp_id:

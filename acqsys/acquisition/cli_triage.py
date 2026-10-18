@@ -18,15 +18,16 @@ def _load_from_json() -> List[Dict[str, Any]]:
     ]:
         if loc.exists():
             try:
-                data = json.loads(loc.read_text(encoding="utf-8", errors="replace"))
-                items = data if isinstance(data, list) else (data.get("candidates") or [])
-                for item in items:
-                    url = item.get("source_url") or item.get("url")
-                    if url and url not in seen:
-                        seen.add(url)
-                        candidates.append(item)
+                raw = loc.read_text(encoding="utf-8", errors="replace")
+                data = json.loads(raw)
             except Exception as e:
-                raise FileNotFoundError(f"failed_to_load_historical: {loc}") from e
+                raise FileNotFoundError(f"failed_to_load_historical: {loc} ({e})") from e
+            items = data if isinstance(data, list) else (data.get("candidates") or [])
+            for item in items:
+                url = item.get("source_url") or item.get("url")
+                if url and url not in seen:
+                    seen.add(url)
+                    candidates.append(item)
     if not candidates:
         raise FileNotFoundError("lead_candidates_2026-10-10.json not found")
     return candidates
