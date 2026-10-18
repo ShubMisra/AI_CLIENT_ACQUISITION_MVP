@@ -17,6 +17,11 @@ class AcquisitionWorker:
         self._workflow = workflow.WorkflowState()
         self._sources: List[source_intel.SourceRecord] = source_intel.load_registry()
 
+    def set_policy(self, policy_port: policy.PolicyPort) -> None:
+        self._policy = policy_port
+        self._browser = browser.BrowserWorker(self._policy)
+        self._browser.configure(allowed_domains=getattr(self._browser, "_allowed_domains", set()))
+
     def record_event(self, run_id: str, source_id: str, kind: str, payload: Dict[str, Any]) -> None:
         ev_id = str(uuid.uuid4())
         self._audit.record(ev_id, run_id, source_id, kind, payload)

@@ -1,7 +1,4 @@
-﻿"""Bounded action-oriented browser abstraction with fixtures + mocked services.
-
-Implements nonempty fixture-based project extraction and respects policy checks.
-"""
+﻿"""Bounded action-oriented browser abstraction with fixtures."""
 from __future__ import annotations
 
 import re
@@ -59,11 +56,16 @@ class BrowserWorker:
         return self
 
     def _check(self, source_id: str, action: str, target_url: str) -> AccessDecision:
+        try:
+            parsed = urlparse(target_url)
+            if parsed.scheme not in ("http", "https"):
+                raise PermissionError("INVALID_SCHEME")
+            hostname = parsed.hostname or ""
+        except Exception:
+            raise PermissionError("INVALID_TARGET_URL")
         dec = self._policy.authorize(source_id=source_id, action=action, target_url=target_url)
         if not dec.allowed:
             raise PermissionError(f"{dec.reason_code}: {source_id} {action} {target_url}")
-        parsed = urlparse(target_url)
-        hostname = parsed.hostname or ""
         if self._allowed_domains:
             if hostname not in self._allowed_domains:
                 ok = False
@@ -80,20 +82,25 @@ class BrowserWorker:
         return {"url": url, "policy_version": dec.policy_version, "ts": self._clock()}
 
     def extract(self, run_id: str, source_id: str, url: str, html: str | None = None) -> ExtractionResult:
+        dec = self._check(source_id, "browser_navigation", url)  # independent auth at extraction
         if html is None and self._fixtures_dir.exists():
             parsed = urlparse(url)
             slug = parsed.path.strip("/").replace("/", "_") or "index"
             fixture = self._fixtures_dir / f"{slug}.html"
             if not fixture.exists():
                 fixture = self._fixtures_dir / Path(parsed.path).name
+            if not fixture.exists():
+                listing = self._fixtures_dir / "listing" / Path(parsed.path).name
+                if listing.exists():
+                    fixture = listing
             if fixture.exists():
                 html = fixture.read_text(encoding="utf-8", errors="replace")
         if html is None:
             html = ""
 
         candidates: List[Dict[str, Any]] = []
-        evidence_refs: List[str] = [f"fixture:{url}"]
         parsed = urlparse(url)
+        evidence_refs: List[str] = [f"fixture:{parsed.path or parsed.netloc}", f"url:{url}"]
 
         title = None
         m = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
@@ -103,10 +110,7 @@ class BrowserWorker:
             m = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.IGNORECASE | re.DOTALL)
             if m:
                 title = re.sub(r"<[^>]+>", " ", m.group(1)).strip()
-        if title:
-            title = re.sub(r"\s+", " ", title)
-        else:
-            title = Path(parsed.path).name or "fixture-item"
+        title = re.sub(r"\s+", " ", title) if title else (Path(parsed.path).name or "fixture-item")
 
         cand = {
             "source_id": source_id,
@@ -116,7 +120,7 @@ class BrowserWorker:
             "demand_type": "EXPLICIT_PROJECT",
             "verification_status": "UNVERIFIED",
             "availability_status": "UNKNOWN",
-            "content_evidence_ref": f"fixture:{url}",
+            "content_evidence_ref": f"fixture:{parsed.path or parsed.netloc}",
             "access_evidence_ref": "policy-evidence-reference",
             "observed_at_utc": self._clock(),
         }

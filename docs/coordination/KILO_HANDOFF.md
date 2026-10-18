@@ -1,30 +1,24 @@
 ﻿# Kilo Handoff: Acquisition Browser Module
 
 ## Summary
-Permission-aware, action-oriented acquisition module (new files only). Default-deny, fixture-based extraction producing non-empty candidates, durable checkpoint restore with policy revalidation semantics, triage reads real historical candidates when present.
+Permission-aware acquisition module with deterministic multi-card fixture extraction, strict default-deny auth, atomic persisted checkpoints with cross-instance resume semantics, and triage loading the actual historical lead_candidates_2026-10-10.json (no fabricated fallback). Public API compatible with Codex PolicyPort.
 
 ## Implemented
-- PolicyPort/AccessDecision + DenyAllPolicy (default-deny) + AllowFixturePolicy (subdomain-aware, policy_version)
-- BrowserWorker with fixture loading, domain bounds, permission checks, non-empty candidate extraction
-- Source intelligence scaffold, lead qualification/dedup, HITL queue
-- Redacted audit, metrics counters
-- WorkflowState with checkpoint/restore (latest/specific), persisted state
-- CLI triage reads historical candidates from data/fixtures; falls back to 10 items (all UNVERIFIED, current_opening UNKNOWN)
-- AcquisitionWorker orchestrator; audit_events exposed
+- PolicyPort/AccessDecision, DenyAllPolicy (default-deny), AllowFixturePolicy (subdomain-aware, policy_version)
+- BrowserWorker: independent authorization at navigate/extract; domain bounds; URL scheme validation; non-empty deterministic extraction
+- Source intelligence scaffold, lead_qual (canonicalize, dedup, qualify)
+- HITL queue, redacted audit, metrics
+- WorkflowState: atomic (os.replace) checkpoint/restore (latest/specific), persisted state; supports fresh policy revalidation on resume
+- CLI triage: loads lead_candidates_2026-10-10.json from root/data/fixtures (dedup by URL); preserves original evidence/budget fields
+- Worker: discover_from_fixtures with dedup, metrics, audit events; set_policy to rebind after resume
+- Fixtures: tests/fixtures/acquisition/listing/a.html, b.html; tests/fixtures/acquisition/lead_candidates_2026-10-10.json
 
 ## Tests
-40 passed (26 existing + 14 acquisition-related). New tests: policy gating, fixture extraction non-empty, worker triage/discovery, audit redaction, metrics, HITL, workflow restore, deny-all default.
+45 passed, 1 warning. Includes multi-card extraction (2 distinct listings), independent auth at nav/extract, triage loads real historical JSON, checkpoint atomic persist + resume with fresh policy, dedup/revocation, deny-by-default.
 
-## Commit/branch
+## Commit
 Branch: feat/kilo-acquisition-pilot
-Commit: (to be added after push)
+SHA: TBD after push
 
-## Evidence
-- Non-empty fixture extraction verified; worker returns candidates when authorized
-- DenyAll blocks by default; negative cases covered
-- Checkpoint restore (latest and specific) with state persistence
-- Triage returns unverified candidates with current_opening UNKNOWN
-- No edits to core.py/app.py/agents.py or existing Codex-owned tests
-
-## Next
-Await Chief Architect review; integrate to Codex PolicyPort contract as published; expand fixture coverage if approved.
+## Notes
+No edits to core.py/app.py/agents.py or existing Codex-owned tests. No live website access, credentials, or proposals. Extraction is fixture-driven by design.
