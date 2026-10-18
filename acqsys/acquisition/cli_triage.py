@@ -9,7 +9,6 @@ import json
 def _load_from_json() -> List[Dict[str, Any]]:
     base = Path(__file__).parent.parent.parent
     candidates: List[Dict[str, Any]] = []
-    # load each file once; dedup by url
     seen = set()
     for loc in [
         base / "lead_candidates_2026-10-10.json",
@@ -26,15 +25,15 @@ def _load_from_json() -> List[Dict[str, Any]]:
                     if url and url not in seen:
                         seen.add(url)
                         candidates.append(item)
-            except Exception:
-                pass
+            except Exception as e:
+                raise FileNotFoundError(f"failed_to_load_historical: {loc}") from e
+    if not candidates:
+        raise FileNotFoundError("lead_candidates_2026-10-10.json not found")
     return candidates
 
 
 def triage() -> List[Dict[str, Any]]:
     items = _load_from_json()
-    if not items:
-        raise FileNotFoundError("lead_candidates_2026-10-10.json not found")
     out: List[Dict[str, Any]] = []
     for i, item in enumerate(items):
         out.append(

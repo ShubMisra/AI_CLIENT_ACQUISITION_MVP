@@ -47,6 +47,7 @@ class AcquisitionWorker:
                 self._metrics.inc_denials(source_id, 1)
                 self.record_event(run_id, source_id, "DENIAL", {"url": url, "reason": str(e)})
             except Exception as e:
+                self._metrics.inc_denials(source_id, 1)
                 self.record_event(run_id, source_id, "ERROR", {"url": url, "error_type": type(e).__name__})
         return {"run_id": run_id, "results": results}
 

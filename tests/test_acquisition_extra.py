@@ -2,7 +2,7 @@
 from pathlib import Path
 
 def test_browser_extract_produces_candidates():
-    p = policy.AllowFixturePolicy(allowed_sources={"src"}, allowed_actions={"browser_navigation"}, allowed_domains={"example.com"})
+    p = policy.AllowFixturePolicy(allowed_sources={"src"}, allowed_actions={"browser_navigation","authenticated_extraction"}, allowed_domains={"example.com"})
     b = browser.BrowserWorker(p, fixtures_dir=Path("tests/fixtures/acquisition"))
     b.configure(allowed_domains={"example.com"})
     ext = b.extract("r1", "src", "https://example.com/projects/123")
@@ -17,7 +17,7 @@ def test_deny_all_default_strict():
 
 
 def test_workflow_restore_latest():
-    wf = workflow.WorkflowState(storage_path=Path("data/test_acq_wf.json"))
+    wf = workflow.WorkflowState(storage_path=Path("data/test_acq_wf_new.json"))
     wf.checkpoint("cp1", "r1", "step1", {"a": 1})
     wf.checkpoint("cp2", "r2", "step2", {"b": 2})
     cp = wf.restore()
@@ -25,7 +25,7 @@ def test_workflow_restore_latest():
 
 
 def test_workflow_restore_specific():
-    wf = workflow.WorkflowState(storage_path=Path("data/test_acq_wf2.json"))
+    wf = workflow.WorkflowState(storage_path=Path("data/test_acq_wf2_new.json"))
     wf.checkpoint("cp1", "r1", "step1", {"a": 1})
     wf.checkpoint("cp2", "r2", "step2", {"b": 2})
     cp = wf.restore("cp1")

@@ -68,7 +68,11 @@ class WorkflowState:
     def checkpoint(self, cp_id: str, run_id: str, state: str, data: Dict[str, Any]) -> Checkpoint:
         cp = Checkpoint(cp_id=cp_id, run_id=run_id, state=state, data=data)
         self._checkpoints.append(cp)
-        self._persist_atomic()
+        try:
+            self._persist_atomic()
+        except Exception as e:
+            # surface persistence failure clearly
+            raise RuntimeError(f"checkpoint_persist_failed: {e}") from e
         return cp
 
     def restore(self, cp_id: str | None = None) -> Optional[Checkpoint]:
@@ -91,13 +95,10 @@ class WorkflowState:
         return None
 
     def _persist_atomic(self) -> None:
-        try:
-            tmp = self._storage_path.with_suffix(".tmp")
-            with tmp.open("w", encoding="utf-8") as f:
-                json.dump({"state": self._state, "checkpoints": [c.to_dict() for c in self._checkpoints]}, f, indent=2, sort_keys=True)
-            os.replace(tmp, self._storage_path)
-        except Exception:
-            pass
+        tmp = self._storage_path.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump({"state": self._state, "checkpoints": [c.to_dict() for c in self._checkpoints]}, f, indent=2, sort_keys=True)
+        os.replace(tmp, self._storage_path)
 
     def status(self) -> Dict[str, Any]:
         return dict(self._state)

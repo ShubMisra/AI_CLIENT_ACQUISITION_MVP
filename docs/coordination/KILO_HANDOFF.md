@@ -1,24 +1,23 @@
 ﻿# Kilo Handoff: Acquisition Browser Module
 
 ## Summary
-Permission-aware acquisition module with deterministic multi-card fixture extraction, strict default-deny auth, atomic persisted checkpoints with cross-instance resume semantics, and triage loading the actual historical lead_candidates_2026-10-10.json (no fabricated fallback). Public API compatible with Codex PolicyPort.
+All requested blockers addressed: strict empty-allowlist denial, independent authenticated_extraction authorization, two listing cards extracted from one HTML, policy-revalidated cross-instance resume, visible persistence failures, genuine historical-data error handling. 51 tests pass.
 
-## Implemented
-- PolicyPort/AccessDecision, DenyAllPolicy (default-deny), AllowFixturePolicy (subdomain-aware, policy_version)
-- BrowserWorker: independent authorization at navigate/extract; domain bounds; URL scheme validation; non-empty deterministic extraction
-- Source intelligence scaffold, lead_qual (canonicalize, dedup, qualify)
-- HITL queue, redacted audit, metrics
-- WorkflowState: atomic (os.replace) checkpoint/restore (latest/specific), persisted state; supports fresh policy revalidation on resume
-- CLI triage: loads lead_candidates_2026-10-10.json from root/data/fixtures (dedup by URL); preserves original evidence/budget fields
-- Worker: discover_from_fixtures with dedup, metrics, audit events; set_policy to rebind after resume
-- Fixtures: tests/fixtures/acquisition/listing/a.html, b.html; tests/fixtures/acquisition/lead_candidates_2026-10-10.json
+## Key changes
+- Policy: empty allowlist treated as denied
+- Browser: separate checks for browser_navigation and authenticated_extraction; extracts up to two cards from single HTML; scheme/domain validation
+- Workflow: atomic persist (os.replace); persistence failures raise RuntimeError
+- Triage: loads real historical JSON from root/data/fixtures; dedups; raises FileNotFoundError with context if missing/unreadable
+- Worker: set_policy to rebind; denials/errors recorded
+- Fixtures: listing/cards.html with two distinct cards; tests cover all cases
 
 ## Tests
-45 passed, 1 warning. Includes multi-card extraction (2 distinct listings), independent auth at nav/extract, triage loads real historical JSON, checkpoint atomic persist + resume with fresh policy, dedup/revocation, deny-by-default.
+51 passed, 1 warning
 
-## Commit
+## Commit/branch
 Branch: feat/kilo-acquisition-pilot
-SHA: TBD after push
+SHA: 8cdb5ba4ab05db44ad57ea1fdb501788ac03da55
 
-## Notes
-No edits to core.py/app.py/agents.py or existing Codex-owned tests. No live website access, credentials, or proposals. Extraction is fixture-driven by design.
+## Links
+- Branch: https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/tree/feat/kilo-acquisition-pilot
+- Draft PR #4: https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/pull/4

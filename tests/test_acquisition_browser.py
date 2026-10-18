@@ -2,7 +2,7 @@
 from acqsys.acquisition import browser, policy
 
 def test_browser_fixture_extract_minimal():
-    p = policy.AllowFixturePolicy(allowed_sources={"src"}, allowed_actions={"browser_navigation"}, allowed_domains={"example.com"})
+    p = policy.AllowFixturePolicy(allowed_sources={"src"}, allowed_actions={"browser_navigation","authenticated_extraction"}, allowed_domains={"example.com"})
     b = browser.BrowserWorker(p, fixtures_dir=Path("tests/fixtures/acquisition"))
     b.configure(allowed_domains={"example.com"})
     nav = b.navigate("r1", "src", "https://example.com/projects/123")
