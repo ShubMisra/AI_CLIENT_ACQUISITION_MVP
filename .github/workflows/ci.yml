@@ -2,7 +2,7 @@ name: Python checks
 
 on:
   push:
-    branches: [feat/codex-p1-integration]
+    branches: [feat/codex-p1-integration, feat/supervised-orchestrator]
   pull_request:
 
 jobs:
@@ -17,7 +17,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt pytest
       - name: Compile
-        run: python -m compileall -q acqsys tests
+        run: python -m compileall -q acqsys orchestrator tests
       - name: Whitespace check
         run: git diff --check
       - name: Tests (fixtures and mocked transports only)
