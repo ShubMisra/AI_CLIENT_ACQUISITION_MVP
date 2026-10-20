@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import urlparse
 import ipaddress
+import socket
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,6 @@ class AllowFixturePolicy:
             if hostname in ("localhost",) or hostname.endswith((".local", ".internal")):
                 return AccessDecision(allowed=False, reason_code="PRIVATE_HOST_FORBIDDEN")
             try:
-                import socket
                 infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
                 for entry in infos:
                     addr = ipaddress.ip_address(entry[4][0])

@@ -15,10 +15,6 @@ class Checkpoint:
     state: str
     data: Dict[str, Any]
 
-    def to_dict(self) -> Dict[str, Any]:
-        from .audit import redact
-        return {"cp_id": self.cp_id, "run_id": self.run_id, "state": self.state, "data": redact(self.data)}
-
 
 class WorkflowState:
     def __init__(self, storage_path: Path | None = None):
@@ -35,26 +31,30 @@ class WorkflowState:
                 raw = self._storage_path.read_text(encoding="utf-8", errors="replace")
                 data = json.loads(raw)
                 if isinstance(data, dict):
-                    st = data.get("state") or {}
+                    st = data.get("state")
                     if isinstance(st, dict):
                         self._state = st
                     cps = data.get("checkpoints") or []
                     if isinstance(cps, list):
                         for c in cps:
-                            if isinstance(c, dict) and all(k in c for k in ("cp_id","run_id","state")):
-                                self._checkpoints.append(Checkpoint(cp_id=c["cp_id"], run_id=c["run_id"], state=c["state"], data=c.get("data") or {}))
+                            if isinstance(c, dict) and all(k in c for k in ("cp_id", "run_id", "state")):
+                                from .audit import redact
+                                self._checkpoints.append(Checkpoint(cp_id=c["cp_id"], run_id=c["run_id"], state=c["state"], data=redact(c.get("data") or {})))
+                return
         except Exception:
-            # corrupted checkpoint file must not be silently ignored in strict cases; leave empty
-            self._checkpoints = []
-            self._state = {"run_id": None, "status": "IDLE", "cursor": 0, "meta": {}}
+            pass
+        self._checkpoints = []
+        self._state = {"run_id": None, "status": "IDLE", "cursor": 0, "meta": {}}
 
     def checkpoint(self, cp_id: str, run_id: str, state: str, data: Dict[str, Any]) -> Checkpoint:
-        cp = Checkpoint(cp_id=cp_id, run_id=run_id, state=state, data=data)
+        from .audit import redact
+        cp = Checkpoint(cp_id=cp_id, run_id=run_id, state=state, data=redact(data))
         self._checkpoints.append(cp)
         try:
             tmp = self._storage_path.with_suffix(".tmp")
+            payload = {"state": self._state, "checkpoints": [{"cp_id": c.cp_id, "run_id": c.run_id, "state": c.state, "data": c.data} for c in self._checkpoints]}
             with tmp.open("w", encoding="utf-8") as f:
-                json.dump({"state": self._state, "checkpoints": [c.to_dict() for c in self._checkpoints]}, f, indent=2, sort_keys=True)
+                json.dump(payload, f, indent=2, sort_keys=True)
             os.replace(tmp, self._storage_path)
         except Exception as e:
             raise RuntimeError(f"checkpoint_persist_failed: {e}") from e
@@ -64,7 +64,8 @@ class WorkflowState:
         if policy_check is None:
             raise ValueError("policy_check_required")
         try:
-            if not policy_check():
+            ok = policy_check()
+            if not ok:
                 raise PermissionError("policy_check_failed")
         except PermissionError:
             raise
