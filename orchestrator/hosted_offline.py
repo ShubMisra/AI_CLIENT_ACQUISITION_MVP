@@ -143,10 +143,17 @@ class DockerMockRunner:
             raise ValueError('absolute Docker path required')
         self.docker = docker
 
-    def command(self, task: HostedTask, stage: Path) -> list[str]:
+    def command(self, task: HostedTask, stage: Path,
+                script: str = 'mock_codex.py', role: str | None = None) -> list[str]:
         task.validate()
         if not stage.is_dir() or stage.is_symlink():
             raise PermissionError('missing public staging directory')
+        if script not in ('mock_codex.py', 'mock_roles.py') or \
+           (script == 'mock_roles.py') != (role in ('codex-blocked', 'kilo-diagnostic', 'codex-resume')):
+            raise PermissionError('unapproved mock command')
+        argv = (['/fixture/mock_codex.py', 'exec', '--sandbox', 'read-only',
+                 '--fixture', '/fixture'] if script == 'mock_codex.py' else
+                ['/fixture/mock_roles.py', 'role', role, '/fixture'])
         return [self.docker, 'run', '--rm', '--pull=never', '--name',
                 'hosted-mock-' + task.nonce[:16], '--network=none', '--read-only',
                 '--cap-drop=ALL', '--security-opt=no-new-privileges:true',
@@ -156,8 +163,7 @@ class DockerMockRunner:
                 '--tmpfs', '/tmp:rw,noexec,nosuid,size=8m', '--workdir=/fixture',
                 '--env', 'HOME=/tmp', '--env', 'PATH=/usr/local/bin:/usr/bin:/bin',
                 '--env', 'PYTHONDONTWRITEBYTECODE=1', '--entrypoint',
-                task.cli_path, task.image_ref, '/fixture/mock_codex.py',
-                'exec', '--sandbox', 'read-only', '--fixture', '/fixture']
+                task.cli_path, task.image_ref, *argv]
 
     def _call(self, args: list[str], timeout: int = 10) -> subprocess.CompletedProcess:
         # Docker client receives no inherited provider, GitHub or host secret env.
@@ -176,7 +182,8 @@ class DockerMockRunner:
         if not self._not_running(name):
             raise TerminationUnverified('container still running')
 
-    def run(self, task: HostedTask, stage: Path, stop_requested=lambda: False) -> bytes:
+    def run(self, task: HostedTask, stage: Path, stop_requested=lambda: False,
+            script: str = 'mock_codex.py', role: str | None = None) -> bytes:
         task.validate()
         if stop_requested():
             raise HostedCancelled('mock run stopped before launch')
@@ -192,7 +199,7 @@ class DockerMockRunner:
         if identity.returncode or not isinstance(digests, list) or \
            not any(ref in valid_refs for ref in digests):
             raise PermissionError('pinned image unavailable')
-        command = self.command(task, stage)
+        command = self.command(task, stage, script, role)
         name = 'hosted-mock-' + task.nonce[:16]
         try:
             completed = self._call(command, timeout=task.timeout_seconds)

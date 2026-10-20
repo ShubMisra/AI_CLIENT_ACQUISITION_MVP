@@ -76,3 +76,30 @@ sandbox. See [security report](HOSTED_PILOT_SECURITY.md) for the founder
 bootstrap and per-run activation checklist. PR #7's trusted-CI merge conflict
 remains a separate review decision. No default-branch merge or live workflow
 dispatch is requested.
+
+## Issue #9 follow-up: three-role MOCK_ONLY handoff
+
+The newer Chief Architect dispatch on Issue #9 asked for a compact coordination
+proof. The existing `offline-mock` job remains the normal Codex success path.
+Three additional ordered, ephemeral Actions jobs demonstrate the blocked path:
+`coord-codex` emits a deterministic `BLOCKED` result after two simulated failed
+attempts; `coord-kilo` accepts only that exact artifact and emits one
+diagnostic-only finding; `coord-codex-resume` accepts only the exact finding,
+runs the task-specific test at the checked-out SHA, and emits `VERIFIED`.
+
+The single hash-chained `coordination-ledger.json` carries source SHA, run and
+attempt, original Codex ownership, Kilo backup ownership, allowed public fixture
+path, acceptance test, simulated founder approval, handoff reason, CI check,
+and zero provider calls/cost. Each job stages only the fixture, pinned mock
+role script, and fixed task JSON into the pre-existing no-network/read-only
+Docker runner. Cross-job artifacts are validated byte-for-byte against the
+expected state and SHA before the next role starts. Issue text or role output
+never becomes shell or an executable task. The Kilo role cannot edit files or
+take over Codex integration. `MOCK_ONLY` is present in every ledger and role
+result; this is not a real CLI session or live model authorization.
+
+Follow-up files: `.github/workflows/hosted-readonly-mock.yml`,
+`orchestrator/hosted_offline.py`, `orchestrator/hosted_coordination.py`,
+`orchestrator/hosted_mock_roles.py`, and `tests/test_hosted_coordination.py`.
+Exact new commit SHA, complete test count, and push/PR workflow run links are
+published in draft PR #10 after the final exact-head CI run.

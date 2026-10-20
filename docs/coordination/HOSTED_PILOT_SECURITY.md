@@ -103,3 +103,17 @@ References: [GitHub workflow syntax](https://docs.github.com/en/actions/referenc
 [manual workflow default-branch rule](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow),
 [hosted runners](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners),
 [artifact retention](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/remove-workflow-artifacts).
+
+## Follow-up mock coordination boundary
+
+Three ordered Actions jobs now simulate a Codex BLOCKED result, a Kilo
+diagnostic, and a Codex follow-up. This remains an offline proof: each new
+job uses a fresh hosted VM, a separate pinned no-network/read-only container,
+and only the public fixture, fixed task JSON, and pinned mock role script are
+mounted. The one-day JSON artifact is a deterministic, hash-chained mock
+ledger. The next job checks its exact bytes, source SHA, run/attempt and fixed
+state before starting. The simulated founder flag has no authority for live
+inference. These checks do not turn public artifacts into authenticated
+external approvals; a future live workflow still needs the independent
+founder signature and durable replay store described above. No GitHub write
+token or provider credential enters the mock container.
