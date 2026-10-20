@@ -222,3 +222,47 @@ auth plus provider-side hard cost caps, and verify the exact target CLI
 versions and noninteractive permission behavior. GitHub writes remain in
 the separate founder-approved publisher; no pilot GitHub write or merge
 path was added.
+
+## Issue #8 validation update — 2026-10-20
+
+Implementation commit `9f822e4df6c1cdfd188a468a7eacf3c9d072de84` on
+`feat/supervised-orchestrator` keeps PR #7 draft and real execution disabled.
+The final handoff SHA and GitHub CI runs are recorded in PR #7 after this
+documentation commit. No main merge, real model call, customer contact,
+image pull or container launch occurred.
+
+Changed files: `orchestrator/readonly_policy.py`, `orchestrator/readonly.py`,
+`orchestrator/store.py`, `orchestrator/cancellation.py`,
+`tests/test_orchestrator_readonly.py`,
+`tests/test_orchestrator_cancellation.py`, `orchestrator/README.md`, and
+`docs/coordination/READONLY_PILOT_SECURITY.md`. The mock probe now identifies
+its evidence as synthetic; the only success state emitted by the pilot is
+`MOCK_VERIFIED_READ_ONLY`. The store rejects the ambiguous prior success
+label for new results. A non-mock probe is rejected before admission. Failed
+Windows `taskkill /T /F` now raises rather than treating a parent-only kill
+as complete tree cancellation.
+
+Validation order: offline mock/adversarial baseline **24 passed**; focused
+new-case and cancellation checks **4 passed**; complete local suite **112
+passed, 1 upstream Starlette/httpx deprecation warning**; final focused
+probe rerun **4 passed**; `compileall` and `git diff --check` passed. All
+tests used mock model execution or harmless local child processes. The
+disposable Git remote test remains part of the full suite.
+
+Target runtime observation: Docker client **28.3.2** selected context
+`desktop-linux`, but `docker version` and `docker info` returned HTTP 500
+from the Docker Desktop Linux engine pipe. Host `codex` now resolves through
+the global npm shim and reports **0.163.0**; host `kilo` reports **7.8.12**;
+`node.exe` resolves from `C:\Program Files\nodejs`. This supersedes the
+earlier PATH observation. These are host checks only; no pinned image or
+in-image CLI/Node digest was attested.
+
+Open activation blockers: a functioning Linux isolation engine and actual
+container escape/egress drill; approved pinned image and CLI/Node hashes;
+noninteractive prompt behavior; isolated provider credentials and an
+externally enforced model spend limit with measured usage; durable ownership
+and stop verification of a real container; and a reviewed endpoint-only
+egress design. `--network=none` currently prevents remote inference. Each
+live call still requires independent security review and an express founder
+instruction. A separate least-privilege GitHub publisher and human draft-PR
+approval remain required for any future publication flow.
