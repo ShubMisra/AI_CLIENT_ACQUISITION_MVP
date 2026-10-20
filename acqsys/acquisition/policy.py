@@ -36,8 +36,8 @@ class AllowFixturePolicy:
     def authorize(self, *, source_id: str, action: str, target_url: str) -> AccessDecision:
         try:
             parsed = urlparse(target_url)
-            if parsed.scheme not in ("http", "https"):
-                return AccessDecision(allowed=False, reason_code="INVALID_TARGET_URL")
+            if parsed.scheme != "https":
+                return AccessDecision(allowed=False, reason_code="INVALID_SCHEME")
             hostname = parsed.hostname or ""
             if not hostname:
                 return AccessDecision(allowed=False, reason_code="INVALID_TARGET_URL")
