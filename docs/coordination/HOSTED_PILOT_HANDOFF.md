@@ -103,3 +103,34 @@ Follow-up files: `.github/workflows/hosted-readonly-mock.yml`,
 `orchestrator/hosted_mock_roles.py`, and `tests/test_hosted_coordination.py`.
 Exact new commit SHA, complete test count, and push/PR workflow run links are
 published in draft PR #10 after the final exact-head CI run.
+
+### Verified follow-up implementation
+
+- Implementation commit: `01e56d54e906f750383a21eae622b5a5637e3687`.
+  Local full suite using the project venv: **152 passed, 1 skipped**, one
+  existing Starlette/httpx deprecation warning. The system Python's user-site
+  pytest was unavailable to the existing isolated verifier subprocess; using
+  the project venv resolved that local environment issue.
+- [Hosted push run 39448861234](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/actions/runs/39448861234):
+  **success at the exact implementation SHA**, including all four jobs.
+  `offline-mock` ran the complete Linux suite: **152 passed, 1 skipped**.
+  `coord-codex-resume` ran the selected coordination acceptance file:
+  **16 passed**. Its log reported `MOCK_ONLY`, `VERIFIED`, source SHA equal
+  to the implementation SHA, and `provider_calls: 0`.
+- [Hosted PR run 39448870713](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/actions/runs/39448870713):
+  **success**, all four jobs; the PR checkout used GitHub merge SHA
+  `58b9e3432aa1dd89ef94756fb1a4e66c40831281`. The separate
+  [Python PR checks 39448870754](https://github.com/ShubMisra/AI_CLIENT_ACQUISITION_MVP/actions/runs/39448870754)
+  also succeeded.
+- Push run final artifact `coordination-mock-verified` ID `12277463782`,
+  one-day retention, digest
+  `sha256:aa53f371aad8394ca923adc90128dc6be58240ff35d7be430a93cd13c3731024`.
+  The blocked Codex and Kilo finding artifacts were uploaded as IDs
+  `12276789361` and `12276079804`. Job logs and artifact metadata were
+  inspected; the ZIP contents were not independently opened in this session.
+
+This is an offline simulation only. The simulated founder flag and public
+artifact chain cannot authorize or authenticate a live agent; the real
+activation blockers above remain open. Chief Architect review is the next
+decision. No real CLI, provider inference, secrets, spending, customer action,
+or merge occurred.
