@@ -212,7 +212,7 @@ class DockerMockRunner:
                                   (b'KeyError', 'KEY_ERROR'),
                                   (b'TypeError', 'TYPE_ERROR'),
                                   (b'Error response from daemon', 'DOCKER_ERROR')):
-                if marker in completed.stderr:
+                if marker in (completed.stderr or b''):
                     code += '_' + label
             if len(completed.stdout) <= MAX_OUTPUT_BYTES:
                 try:
