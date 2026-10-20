@@ -32,6 +32,12 @@ class TerminationUnverified(RuntimeError):
     pass
 
 
+class MockExecutionFailure(RuntimeError):
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
 def _git(root: Path, *args: str) -> bytes:
     result = subprocess.run(['git', *args], cwd=root, capture_output=True,
                             timeout=10, check=False)
@@ -199,7 +205,18 @@ class DockerMockRunner:
         if stop_requested():
             raise HostedCancelled('mock run stopped')
         if completed.returncode:
-            raise PermissionError('mock executable failed')
+            code = 'MOCK_EXIT_' + str(completed.returncode) if 0 <= completed.returncode <= 255 \
+                else 'MOCK_EXIT_UNKNOWN'
+            if len(completed.stdout) <= MAX_OUTPUT_BYTES:
+                try:
+                    checks = json.loads(completed.stdout).get('checks', {})
+                    for name in ('private_paths_absent', 'secret_env_absent',
+                                 'write_denied', 'network_denied'):
+                        if checks.get(name) is False:
+                            code += '_' + name.upper()
+                except (ValueError, AttributeError, TypeError):
+                    pass
+            raise MockExecutionFailure(code)
         return completed.stdout
 
 
@@ -246,11 +263,12 @@ def run_offline(root: Path, context: HostedContext, output: Path,
     except BaseException as exc:
         ledger.finish(task, 'BLOCKED', None)
         # Raw subprocess output and exception text are never published.
-        safe_codes = {'pinned image unavailable', 'mock executable failed',
+        safe_codes = {'pinned image unavailable',
                       'mock report, containment or usage mismatch',
                       'mock output too large', 'invalid measured mock usage'}
-        code = str(exc) if type(exc) is PermissionError and str(exc) in safe_codes \
-            else type(exc).__name__
+        code = exc.code if type(exc) is MockExecutionFailure else (
+            str(exc) if type(exc) is PermissionError and str(exc) in safe_codes
+            else type(exc).__name__)
         raise PermissionError('hosted mock blocked during ' + phase + ': ' + code) from None
 
 

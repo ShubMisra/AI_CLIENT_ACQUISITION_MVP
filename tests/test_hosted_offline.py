@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from orchestrator.hosted_offline import (
-    DockerMockRunner, HostedCancelled, TerminationUnverified, make_task,
+    DockerMockRunner, HostedCancelled, MockExecutionFailure, TerminationUnverified, make_task,
     run_offline, run_real, verify_mock_result, verify_source,
 )
 from orchestrator.hosted_policy import (
@@ -243,6 +243,26 @@ def test_qualified_registry_digest_is_same_pinned_image(toy, monkeypatch):
         return subprocess.CompletedProcess(args, 0, b'')
     monkeypatch.setattr(docker, '_call', fake_call)
     assert verify_mock_result(docker.run(task, stage), task)['mode'] == 'MOCK'
+
+
+def test_failed_mock_reports_only_fixed_check_names(toy, monkeypatch):
+    root, context, output = toy
+    task = make_task(context, verify_source(root, context)[2])
+    stage = output / 'stage'
+    stage.mkdir(parents=True)
+    docker = DockerMockRunner('/usr/bin/docker')
+    def fake_call(args, timeout=10):
+        if args[1:3] == ['image', 'inspect']:
+            return subprocess.CompletedProcess(args, 0, canonical([IMAGE]))
+        if args[1] == 'run':
+            return subprocess.CompletedProcess(args, 5, canonical({
+                'checks': {'network_denied': False}, 'raw': 'DO_NOT_LOG_PRIVATE_MARKER'}))
+        return subprocess.CompletedProcess(args, 0, b'')
+    monkeypatch.setattr(docker, '_call', fake_call)
+    with pytest.raises(MockExecutionFailure) as error:
+        docker.run(task, stage)
+    assert error.value.code == 'MOCK_EXIT_5_NETWORK_DENIED'
+    assert 'DO_NOT_LOG_PRIVATE_MARKER' not in str(error.value)
 
 
 def test_real_gate_and_workflow_are_dormant(toy):
