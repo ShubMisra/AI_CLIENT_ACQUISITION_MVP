@@ -228,6 +228,23 @@ def test_cancelled_job_and_failed_container_kill_fail_closed(toy, monkeypatch):
     assert any(args[1] == 'kill' for args in calls)
 
 
+def test_qualified_registry_digest_is_same_pinned_image(toy, monkeypatch):
+    root, context, output = toy
+    task = make_task(context, verify_source(root, context)[2])
+    stage = output / 'stage'
+    stage.mkdir(parents=True)
+    docker = DockerMockRunner('/usr/bin/docker')
+    def fake_call(args, timeout=10):
+        if args[1:3] == ['image', 'inspect']:
+            return subprocess.CompletedProcess(args, 0, canonical([
+                'docker.io/library/' + IMAGE]))
+        if args[1] == 'run':
+            return subprocess.CompletedProcess(args, 0, canonical(mock_result(task)))
+        return subprocess.CompletedProcess(args, 0, b'')
+    monkeypatch.setattr(docker, '_call', fake_call)
+    assert verify_mock_result(docker.run(task, stage), task)['mode'] == 'MOCK'
+
+
 def test_real_gate_and_workflow_are_dormant(toy):
     with pytest.raises(PermissionError, match='disabled'):
         run_real()

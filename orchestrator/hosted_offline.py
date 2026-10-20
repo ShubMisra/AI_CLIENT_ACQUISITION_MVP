@@ -180,7 +180,11 @@ class DockerMockRunner:
             digests = json.loads(identity.stdout)
         except (ValueError, TypeError) as exc:
             raise PermissionError('image identity unavailable') from exc
-        if identity.returncode or task.image_ref not in digests:
+        expected_digest = task.image_ref.split('@', 1)[1]
+        valid_refs = {'python@' + expected_digest,
+                      'docker.io/library/python@' + expected_digest}
+        if identity.returncode or not isinstance(digests, list) or \
+           not any(ref in valid_refs for ref in digests):
             raise PermissionError('pinned image unavailable')
         command = self.command(task, stage)
         name = 'hosted-mock-' + task.nonce[:16]
@@ -209,6 +213,7 @@ def run_offline(root: Path, context: HostedContext, output: Path,
     output.mkdir(parents=True, exist_ok=True)
     ledger = HostedLedger(output / 'mock-ledger.sqlite')
     ledger.claim(task, approval, key, context)
+    phase = 'prelaunch'
     try:
         if stop_requested():
             raise HostedCancelled('mock run cancelled before launch')
@@ -216,9 +221,11 @@ def run_offline(root: Path, context: HostedContext, output: Path,
             Path(temporary).chmod(0o755)
             stage = Path(temporary) / 'public'
             stage_public(stage, task, (fixture, mock, review))
+            phase = 'container'
             raw = (runner or DockerMockRunner()).run(task, stage, stop_requested)
             if stop_requested():
                 raise HostedCancelled('mock run cancelled after process exit')
+            phase = 'report'
             report = verify_mock_result(raw, task)
         result_sha = sha256(canonical(report))
         audit_sha = ledger.finish(task, 'ACCEPT_MOCK', result_sha)
@@ -239,7 +246,12 @@ def run_offline(root: Path, context: HostedContext, output: Path,
     except BaseException as exc:
         ledger.finish(task, 'BLOCKED', None)
         # Raw subprocess output and exception text are never published.
-        raise PermissionError('hosted mock blocked: ' + type(exc).__name__) from None
+        safe_codes = {'pinned image unavailable', 'mock executable failed',
+                      'mock report, containment or usage mismatch',
+                      'mock output too large', 'invalid measured mock usage'}
+        code = str(exc) if type(exc) is PermissionError and str(exc) in safe_codes \
+            else type(exc).__name__
+        raise PermissionError('hosted mock blocked during ' + phase + ': ' + code) from None
 
 
 def run_real(*_args, **_kwargs):
