@@ -153,6 +153,7 @@ class ProbeResult:
     auth_ready: bool
     hard_token_limit: bool
     hard_cost_limit: bool
+    evidence_kind: str
 
 
 @dataclass(frozen=True)

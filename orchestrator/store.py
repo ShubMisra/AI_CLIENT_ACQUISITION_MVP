@@ -489,7 +489,7 @@ class Store:
                      input_tokens: int | None, output_tokens: int | None,
                      charged_cost: float | None, report: dict | None,
                      report_sha256: str | None, error_code: str | None):
-        if status not in ('VERIFIED_READ_ONLY', 'FAILED', 'STOPPED'):
+        if status not in ('MOCK_VERIFIED_READ_ONLY', 'FAILED', 'STOPPED'):
             raise ValueError('invalid pilot result')
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -498,7 +498,7 @@ class Store:
                 raise ValueError('pilot run not active')
             if row['stop_requested']:
                 status = 'STOPPED'
-            if status == 'VERIFIED_READ_ONLY' and (input_tokens is None or output_tokens is None or
+            if status == 'MOCK_VERIFIED_READ_ONLY' and (input_tokens is None or output_tokens is None or
                     charged_cost is None or report is None or head_sha != row['source_sha'] or
                     input_tokens < 0 or output_tokens < 0 or charged_cost < 0 or
                     input_tokens + output_tokens > row['reserved_tokens'] or

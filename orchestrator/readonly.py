@@ -19,7 +19,7 @@ class MockPilotBackend:
 
     def probe(self, pin: RuntimePin, tariff: ProviderTariff) -> ProbeResult:
         return ProbeResult(pin.image_ref, pin.cli_sha256, pin.version,
-                           pin.node_version, True, True, True)
+                           pin.node_version, True, True, True, 'mock')
 
     def run(self, plan: DockerPlan, facts: dict, stop_requested, timeout_seconds: int) -> dict:
         if stop_requested():
@@ -75,8 +75,8 @@ class ReadOnlyPilot:
             raise PermissionError('provider hard cap cannot cover pilot budget')
         probe = self.backend.probe(pin, tariff)
         if probe != ProbeResult(pin.image_ref, pin.cli_sha256, pin.version,
-                                pin.node_version, True, True, True):
-            raise PermissionError('image, CLI, Node, authentication or hard provider cap unverified')
+                                pin.node_version, True, True, True, 'mock'):
+            raise PermissionError('mock profile mismatch; live attestation is unavailable')
         facts = verify_public_fixture(spec, self.root, self.git_executable)
         return pin, tariff, facts
 
@@ -113,7 +113,7 @@ class ReadOnlyPilot:
                     raise PermissionError('pilot source changed during execution')
                 if self.store.pilot_run(run_id)['stop_requested']:
                     raise InterruptedError('pilot stopped')
-                self.store.pilot_finish(run_id, 'VERIFIED_READ_ONLY', spec.source_sha,
+                self.store.pilot_finish(run_id, 'MOCK_VERIFIED_READ_ONLY', spec.source_sha,
                                         in_tokens, out_tokens, charged, report,
                                         digest(report), None)
         except Exception as exc:

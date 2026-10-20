@@ -105,7 +105,7 @@ def test_one_shot_pinned_offline_plan_and_evidence(pilot, owner):
     approval = service.approve(specs[owner], TOKEN)
     run_id = service.run_mock(approval, TOKEN)
     row = store.pilot_run(run_id)
-    assert row['status'] == 'VERIFIED_READ_ONLY'
+    assert row['status'] == 'MOCK_VERIFIED_READ_ONLY'
     assert row['source_sha'] == row['head_sha'] == specs[owner]['source_sha']
     assert json.loads(row['report'])['branch'] == specs[owner]['branch']
     assert row['input_tokens'] == row['output_tokens'] == 0
@@ -147,6 +147,20 @@ def test_founder_auth_and_live_backend_disabled(pilot):
         service.execute_live()
     with pytest.raises(PermissionError):
         ReadOnlyPilot(store, root, 'git', service.profiles, service.tariffs, object())
+
+
+def test_mock_evidence_cannot_be_presented_as_live_attestation(pilot):
+    service, store, backend, specs, _ = pilot
+    pin = service.profiles['codex']
+    tariff = service.tariffs[('codex', 'codex-provider', 'codex-model')]
+    backend.probe_result = replace(backend.probe(pin, tariff), evidence_kind='live')
+    with pytest.raises(PermissionError, match='mock profile mismatch'):
+        service.approve(specs['codex'], TOKEN)
+    assert not store.pilot_runs()
+    assert not backend.plans
+    with pytest.raises(ValueError, match='invalid pilot result'):
+        store.pilot_finish('nonexistent', 'VERIFIED_READ_ONLY', None,
+                           None, None, None, None, None, None)
 
 
 def test_source_and_public_fixture_must_be_clean_and_synthetic(pilot):
@@ -268,7 +282,7 @@ def test_snapshot_stages_only_allowlisted_public_files(pilot, monkeypatch):
         assert 'attack.py' not in {p.name for p in source.iterdir()}
     backend.hook = inspect
     row = store.pilot_run(service.run_mock(service.approve(specs['codex'], TOKEN), TOKEN))
-    assert row['status'] == 'VERIFIED_READ_ONLY'
+    assert row['status'] == 'MOCK_VERIFIED_READ_ONLY'
     assert b'NEVER_COPY_THIS_SECRET' not in store.settings.db_path.read_bytes()
 
 
@@ -389,5 +403,5 @@ def test_founder_dashboard_pilot_gate_and_mock_result(pilot):
     approval = response.json()['approval_id']
     result = client.post(f'/api/pilot/approvals/{approval}/run-mock', headers=headers)
     assert result.status_code == 200
-    assert store.pilot_run(result.json()['run_id'])['status'] == 'VERIFIED_READ_ONLY'
+    assert store.pilot_run(result.json()['run_id'])['status'] == 'MOCK_VERIFIED_READ_ONLY'
     assert client.post(f'/api/pilot/approvals/{approval}/run-mock', headers=headers).status_code == 403

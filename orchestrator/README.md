@@ -128,6 +128,9 @@ Codex, Kilo or a provider call. Real CLI execution always raises
 `PermissionError`. Only exact deterministic public facts and measured mock
 usage pass validation; raw model output is never persisted. Both the old
 controller and pilot share atomic daily budget and concurrency reservations.
+Successful offline results are explicitly recorded as
+`MOCK_VERIFIED_READ_ONLY`; the synthetic profile probe cannot attest a live
+image, model authentication, provider hard cap, or CLI permission behavior.
 
 Docker Desktop's Linux engine was unavailable in the reviewed Windows shell,
 so the OS restrictions are verified as a command plan and fixture snapshot,

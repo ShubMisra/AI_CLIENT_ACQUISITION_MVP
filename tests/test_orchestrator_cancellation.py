@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+import orchestrator.cancellation as cancellation
 from orchestrator.cancellation import isolated_process_flags, supervise, terminate_tree
 
 
@@ -39,3 +40,28 @@ def test_deadline_terminates_blocked_process():
         assert proc.poll() is not None
     finally:
         terminate_tree(proc)
+
+
+def test_windows_tree_kill_failure_is_not_reported_as_success(monkeypatch):
+    if cancellation.os.name != 'nt':
+        pytest.skip('Windows taskkill branch')
+
+    class Process:
+        pid = 12345
+        killed = False
+
+        def poll(self):
+            return 1 if self.killed else None
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self, timeout):
+            return 1
+
+    monkeypatch.setattr(cancellation.subprocess, 'run',
+                        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1))
+    process = Process()
+    with pytest.raises(RuntimeError, match='unverified'):
+        terminate_tree(process)
+    assert process.killed

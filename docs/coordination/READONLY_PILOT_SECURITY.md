@@ -5,6 +5,32 @@ The actual Codex and Kilo CLIs remain disabled. The only executable pilot
 backend is an offline mock. No repository checkout, GitHub issue body, model
 output or provider response can supply runner flags or grant permission.
 
+## Validation update — 2026-10-20
+
+- The mock success state is now `MOCK_VERIFIED_READ_ONLY`. The store rejects
+  the former ambiguous `VERIFIED_READ_ONLY` state for new results. Probe
+  evidence must explicitly be `mock`; a claimed live attestation is rejected
+  before admission. `execute_live()` still always denies execution.
+- Windows process-tree cancellation now fails closed when `taskkill /T /F`
+  returns an error. Killing the parent alone is not accepted as evidence that
+  its descendants stopped. The adversarial failure test and existing stop,
+  emergency and timeout tests use harmless local processes only. Durable
+  ownership of a real container/process tree remains unproven.
+- On the target Windows host, Docker client 28.3.2 selected `desktop-linux`,
+  but both `docker version` and `docker info` received HTTP 500 from the
+  Docker Desktop Linux-engine pipe. No image was inspected or started; the
+  planned kernel sandbox has not been validated.
+- The current host shell resolves `codex` through the global npm shim and
+  reports `codex-cli 0.163.0`; `kilo` reports `7.8.12`; Node resolves from
+  `C:\Program Files\nodejs\node.exe`. This supersedes the older host PATH
+  observation in the prior handoff. Host shims are not the proposed in-image
+  pinned executables. Image digest, CLI hashes/versions, Kilo Node pin,
+  noninteractive permissions and provider hard limits remain unattested.
+- The static plan denies network access, so it cannot contact a remote model
+  endpoint. An egress design that permits only an approved model endpoint,
+  with separately scoped authentication and externally enforced spend limits,
+  still needs independent review before any live activation.
+
 ## Enforced in code
 
 - One-use founder approval binds Issue #8, owner, disposable worktree,

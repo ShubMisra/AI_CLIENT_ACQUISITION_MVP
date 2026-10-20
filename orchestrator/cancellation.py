@@ -21,8 +21,13 @@ def terminate_tree(process: subprocess.Popen) -> None:
     if process.poll() is not None:
         return
     if os.name == 'nt':
-        subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
-                       capture_output=True, timeout=10, check=False)
+        result = subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                                capture_output=True, timeout=10, check=False)
+        if result.returncode != 0:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+            raise RuntimeError('process-tree termination unverified')
     else:
         try:
             os.killpg(process.pid, signal.SIGKILL)
