@@ -11,6 +11,15 @@ from pathlib import Path
 VERSION = 'mock-codex/1'
 
 
+def can_read(path: Path) -> bool:
+    try:
+        with path.open('rb') as source:
+            source.read(1)
+        return True
+    except OSError:
+        return False
+
+
 def main() -> int:
     if sys.argv[1:] != ['exec', '--sandbox', 'read-only', '--fixture', '/fixture']:
         return 2
@@ -22,7 +31,7 @@ def main() -> int:
     public = json.loads(fixture)
     if set(public) != {'fixture_id', 'company', 'note'}:
         return 4
-    forbidden_read = any(p.exists() for p in (
+    forbidden_read = any(can_read(p) for p in (
         Path('/root/.ssh/id_rsa'), Path('/fixture/data/acquisition.db'),
         Path('/fixture/.git'), Path('/fixture/.env')))
     secret_visible = bool(os.environ.get('HOST_SECRET_MARKER') or os.environ.get('GITHUB_TOKEN'))

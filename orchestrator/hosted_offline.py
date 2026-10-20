@@ -207,6 +207,13 @@ class DockerMockRunner:
         if completed.returncode:
             code = 'MOCK_EXIT_' + str(completed.returncode) if 0 <= completed.returncode <= 255 \
                 else 'MOCK_EXIT_UNKNOWN'
+            for marker, label in ((b'PermissionError', 'PERMISSION_ERROR'),
+                                  (b'FileNotFoundError', 'FILE_NOT_FOUND'),
+                                  (b'KeyError', 'KEY_ERROR'),
+                                  (b'TypeError', 'TYPE_ERROR'),
+                                  (b'Error response from daemon', 'DOCKER_ERROR')):
+                if marker in completed.stderr:
+                    code += '_' + label
             if len(completed.stdout) <= MAX_OUTPUT_BYTES:
                 try:
                     checks = json.loads(completed.stdout).get('checks', {})

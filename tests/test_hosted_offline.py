@@ -20,6 +20,7 @@ from orchestrator.hosted_policy import (
     HostedLedger, HostedTask, canonical, sha256, simulate_founder_approval,
     utc_now,
 )
+from orchestrator.hosted_mock_codex import can_read
 
 SOURCE = Path(__file__).resolve().parents[1]
 
@@ -169,6 +170,13 @@ def test_symlink_fixture_denied(toy):
         pytest.skip('symlink creation unavailable')
     with pytest.raises(PermissionError):
         run_offline(root, context, output, FakeRunner())
+
+
+def test_private_path_permission_denial_counts_as_inaccessible(monkeypatch):
+    def deny(_path, *_args, **_kwargs):
+        raise PermissionError('private path')
+    monkeypatch.setattr(Path, 'open', deny)
+    assert can_read(Path('/root/.ssh/id_rsa')) is False
 
 
 @pytest.mark.parametrize('change', [
