@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from .policy import require_founder
+from .cancellation import TerminationUnverified
 from .readonly_policy import (DockerPlan, PilotSpec, ProbeResult, ProviderTariff,
                               RuntimePin, build_docker_plan, digest, snapshot_facts,
                               verify_public_fixture)
@@ -119,6 +120,8 @@ class ReadOnlyPilot:
         except Exception as exc:
             # Never persist the exception string or raw model output: either may contain secrets.
             code = type(exc).__name__
+            if isinstance(exc, TerminationUnverified):
+                self.store.request_stop(run_id, emergency=True)
             try:
                 self.backend.terminate(self.store.pilot_run(run_id)['container_name'])
             except Exception:

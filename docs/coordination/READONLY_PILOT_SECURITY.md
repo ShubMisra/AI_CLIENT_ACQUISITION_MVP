@@ -13,9 +13,11 @@ output or provider response can supply runner flags or grant permission.
   before admission. `execute_live()` still always denies execution.
 - Windows process-tree cancellation now fails closed when `taskkill /T /F`
   returns an error. Killing the parent alone is not accepted as evidence that
-  its descendants stopped. The adversarial failure test and existing stop,
-  emergency and timeout tests use harmless local processes only. Durable
-  ownership of a real container/process tree remains unproven.
+  its descendants stopped. The pilot latches emergency stop when this
+  unverified condition reaches the backend, and stores only the error class.
+  The adversarial failure test and existing stop, emergency and timeout tests
+  use harmless local processes only. Durable ownership of a real
+  container/process tree remains unproven.
 - On the target Windows host, Docker client 28.3.2 selected `desktop-linux`,
   but both `docker version` and `docker info` received HTTP 500 from the
   Docker Desktop Linux-engine pipe. No image was inspected or started; the

@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from orchestrator.policy import Settings
-from orchestrator.cancellation import isolated_process_flags, supervise
+from orchestrator.cancellation import TerminationUnverified, isolated_process_flags, supervise
 from orchestrator.readonly import MockPilotBackend, ReadOnlyPilot
 from orchestrator.readonly_policy import ProviderTariff, RuntimePin, build_docker_plan
 from orchestrator.store import Store
@@ -345,6 +345,18 @@ def test_failed_stop_latches_gate(pilot):
         store.pilot_admit(service.approve(specs['kilo'], TOKEN))
 
 
+def test_unverified_process_tree_latches_emergency(pilot):
+    service, store, backend, specs, _ = pilot
+    backend.hook = lambda: (_ for _ in ()).throw(TerminationUnverified('private detail'))
+    approval = service.approve(specs['codex'], TOKEN)
+    row = store.pilot_run(service.run_mock(approval, TOKEN))
+    assert row['status'] == 'STOPPED'
+    assert row['error_code'] == 'TerminationUnverified'
+    assert 'private detail' not in store.settings.db_path.read_text(errors='ignore')
+    with pytest.raises(PermissionError):
+        store.pilot_admit(service.approve(specs['kilo'], TOKEN))
+
+
 def test_atomic_daily_budget_prevents_side_effects(pilot):
     service, store, backend, specs, root = pilot
     store.set_budgets(100, 0.001)
@@ -367,7 +379,7 @@ def test_pilot_child_process_tree_cannot_leave_delayed_effect(pilot, mode):
         def run(self, plan, facts, stop_requested, timeout_seconds):
             self.plans.append(plan)
             child = subprocess.Popen([sys.executable, '-c',
-                                      'import pathlib,time; time.sleep(0.5); '
+                                      'import pathlib,time; time.sleep(2); '
                                       'pathlib.Path(%r).write_text("late")' % str(marker)],
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                      **isolated_process_flags())
@@ -384,7 +396,7 @@ def test_pilot_child_process_tree_cannot_leave_delayed_effect(pilot, mode):
     row = store.pilot_run(service.run_mock(approval, TOKEN))
     assert row['status'] == ('FAILED' if mode == 'timeout' else 'STOPPED')
     assert row['error_code'] in ('InterruptedError', 'TimeoutError')
-    time.sleep(0.6)
+    time.sleep(2.2)
     assert not marker.exists()
 
 

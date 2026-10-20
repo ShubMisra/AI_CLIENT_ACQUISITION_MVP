@@ -239,13 +239,15 @@ Changed files: `orchestrator/readonly_policy.py`, `orchestrator/readonly.py`,
 its evidence as synthetic; the only success state emitted by the pilot is
 `MOCK_VERIFIED_READ_ONLY`. The store rejects the ambiguous prior success
 label for new results. A non-mock probe is rejected before admission. Failed
-Windows `taskkill /T /F` now raises rather than treating a parent-only kill
-as complete tree cancellation.
+Windows `taskkill /T /F` now raises and latches emergency stop rather than
+treating a parent-only kill as complete tree cancellation.
 
 Validation order: offline mock/adversarial baseline **24 passed**; focused
-new-case and cancellation checks **4 passed**; complete local suite **112
-passed, 1 upstream Starlette/httpx deprecation warning**; final focused
-probe rerun **4 passed**; `compileall` and `git diff --check` passed. All
+new-case and cancellation checks **4 passed**; initial full suite **112
+passed**. A second full run exposed a Windows `taskkill` race that now
+latches emergency stop. After that fix, focused cancellation tests **5
+passed** and the complete suite **113 passed, 1 upstream Starlette/httpx
+deprecation warning**. `compileall` and `git diff --check` passed. All
 tests used mock model execution or harmless local child processes. The
 disposable Git remote test remains part of the full suite.
 

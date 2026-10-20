@@ -11,6 +11,10 @@ import subprocess
 import time
 
 
+class TerminationUnverified(RuntimeError):
+    """The parent was stopped, but descendants may still exist."""
+
+
 def isolated_process_flags() -> dict:
     if os.name == 'nt':
         return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
@@ -27,7 +31,7 @@ def terminate_tree(process: subprocess.Popen) -> None:
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=5)
-            raise RuntimeError('process-tree termination unverified')
+            raise TerminationUnverified('process-tree termination unverified')
     else:
         try:
             os.killpg(process.pid, signal.SIGKILL)
