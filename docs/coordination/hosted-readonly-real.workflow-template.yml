@@ -1,0 +1,27 @@
+# DESIGN TEMPLATE ONLY. Not in .github/workflows; GitHub cannot run this file.
+# A later reviewed change must implement external approval, egress and billing
+# before moving any workflow to the protected default branch.
+name: Future one-shot Codex read-only pilot - DORMANT
+
+on:
+  workflow_dispatch:
+    inputs:
+      approval_id:
+        description: Founder-approved, externally stored single-run approval ID
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: one-shot-codex-readonly
+  cancel-in-progress: false
+
+jobs:
+  real-readonly:
+    if: ${{ false }} # Deliberate hard stop; this template has no executable steps.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: founder-approved-one-shot # Not created or configured here.
+    steps:
+      - run: echo 'Real inference remains disabled; separate founder authorization required.'
