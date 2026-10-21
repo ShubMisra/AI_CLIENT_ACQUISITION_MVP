@@ -123,8 +123,10 @@ activated, no buyer was contacted, and no merge into `main` was made.
 
 This section supersedes the earlier Kilo-head and fixture-only pipeline status
 above. Integration branch `feat/codex-p1-integration` merged Kilo PR #4's
-published `902b9fd1a7bfe8e3cec7d23ef6483258fb4e344b` as `03e3676`.
-Kilo's branch and worktree were not edited. The latest delta includes distinct
+published `902b9fd1a7bfe8e3cec7d23ef6483258fb4e344b` as `03e3676`,
+then synchronized PR #4's newer `51f1ca7a39e20f201d52a188ab7a22195e055d71`.
+The latter differs only in `KILO_HANDOFF.md`; acquisition source files are
+identical. Kilo's branch and worktree were not edited. The latest delta includes distinct
 card evidence, a qualification alias, a shortlist formatter, and additional
 negative tests. Central `CorePolicyPort`, SQLite, audit and run state remain
 authoritative; Kilo's fixture policy, workflow checkpoint and shortlist are
