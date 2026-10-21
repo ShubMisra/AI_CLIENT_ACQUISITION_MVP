@@ -1,7 +1,7 @@
 ﻿"""Lead qualification and deduplication (new module)."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from urllib.parse import urlparse
 
 
@@ -32,4 +32,9 @@ def qualify(cand: Dict[str, Any]) -> Dict[str, Any]:
     q.setdefault("demand_type", cand.get("demand_type", "EXPLICIT_PROJECT"))
     q.setdefault("content_evidence_ref", cand.get("content_evidence_ref"))
     q.setdefault("access_evidence_ref", cand.get("access_evidence_ref"))
+    q.setdefault("observed_at_utc", cand.get("observed_at_utc"))
     return q
+
+
+# backward compatibility
+qual = qualify

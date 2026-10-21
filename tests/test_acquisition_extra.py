@@ -17,16 +17,16 @@ def test_deny_all_default_strict():
 
 
 def test_workflow_restore_latest():
-    wf = workflow.WorkflowState(storage_path=Path("data/test_acq_wf_new.json"))
+    wf = workflow.WorkflowState(storage_path=Path("data/test_acq_wf_new3.json"))
     wf.checkpoint("cp1", "r1", "step1", {"a": 1})
     wf.checkpoint("cp2", "r2", "step2", {"b": 2})
-    cp = wf.restore()
+    cp = wf.restore(policy_check=lambda: True)
     assert cp is not None and cp.cp_id == "cp2"
 
 
 def test_workflow_restore_specific():
-    wf = workflow.WorkflowState(storage_path=Path("data/test_acq_wf2_new.json"))
+    wf = workflow.WorkflowState(storage_path=Path("data/test_acq_wf2_new3.json"))
     wf.checkpoint("cp1", "r1", "step1", {"a": 1})
     wf.checkpoint("cp2", "r2", "step2", {"b": 2})
-    cp = wf.restore("cp1")
+    cp = wf.restore("cp1", policy_check=lambda: True)
     assert cp is not None and cp.cp_id == "cp1"

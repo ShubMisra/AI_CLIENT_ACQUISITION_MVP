@@ -21,7 +21,7 @@ def _load_from_json() -> List[Dict[str, Any]]:
                 raw = loc.read_text(encoding="utf-8", errors="replace")
                 data = json.loads(raw)
             except Exception as e:
-                raise FileNotFoundError(f"failed_to_load_historical: {loc} ({e})") from e
+                raise FileNotFoundError(f"failed_to_load_historical: {loc}") from e
             items = data if isinstance(data, list) else (data.get("candidates") or [])
             for item in items:
                 url = item.get("source_url") or item.get("url")
@@ -42,14 +42,10 @@ def triage() -> List[Dict[str, Any]]:
                 "id": item.get("id") or f"hist-{i+1:03d}",
                 "url": item.get("source_url") or item.get("url") or "",
                 "title": item.get("title") or "",
-                "category_hint": item.get("category_hint") or item.get("category") or "OTHER",
+                "category_hint": item.get("category_hint") or "OTHER",
                 "technical_fit": "HYPOTHESIS",
                 "current_opening": "UNKNOWN",
-                "verification_tasks": [
-                    "Verify post freshness and scope",
-                    "Confirm buyer identity/contact policy",
-                    "Check budget/currency grounding",
-                ],
+                "verification_tasks": ["Verify post freshness and scope", "Confirm buyer identity/contact policy", "Check budget/currency grounding"],
                 "proposed_founder_action": "REVIEW_MANUALLY",
                 "verification_status": "UNVERIFIED",
                 "availability_status": "UNKNOWN",
