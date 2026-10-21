@@ -1,0 +1,57 @@
+# Acquisition authorization interface — v1
+
+This is the committed contract for the Codex core and Kilo's injected acquisition modules. Import `AccessDecision` and `CorePolicyPort` from `acqsys.core`; inject a `PolicyPort` compatible object into collectors. No collector may infer permission from a login, a search result, a caller boolean, or a source name.
+
+```python
+from dataclasses import dataclass
+from typing import Protocol
+
+@dataclass(frozen=True)
+class AccessDecision:
+    allowed: bool
+    reason_code: str
+    policy_version: str | None = None
+    expires_at: str | None = None
+    permitted_scope: tuple[str, ...] = ()
+
+class PolicyPort(Protocol):
+    def authorize(self, *, source_id: str, action: str, target_url: str) -> AccessDecision: ...
+
+# Production adapter: core.CorePolicyPort().authorize(...)
+# Functional form: core.policy_check(source_id, action, target_url)
+```
+
+Call before **each** network operation, including a new page navigation or API request. The call records `POLICY_CHECKED` on allowance and `ACTION_DENIED` on denial in the audit chain. It consumes one unit of the source's persisted rate budget on allowance. Callers must stop on `allowed=False`; they must not retry under another source ID. Source IDs identify the service actually contacted: a Brave API query is `brave_search_api`, a Freelancer API query is `freelancer_official_api`, and an RSS feed uses its separately registered source ID. Returned third-party URLs are candidates, never authorization for a fetch.
+
+Supported automated actions: `official_api`, `feed_read`, `browser_navigation`, `authenticated_extraction`. `messaging` and `application_submission` always deny in this port. A source requires lifecycle `ACTIVE` or `PILOT_RUNNING`, policy `CONFIRMED`, unexpired review, explicit action permission, a target within the registered host and allowed path prefixes, an unrestricted account, and remaining rate budget. Unknown source/action, missing evidence, manual-only, review/pause states, expiry, target mismatch, and rate exhaustion deny by default. Reason codes are stable uppercase strings such as `UNKNOWN_SOURCE`, `UNKNOWN_ACTION`, `INACTIVE_SOURCE`, `POLICY_UNCONFIRMED`, `POLICY_EXPIRED`, `ACTION_NOT_ALLOWED`, `TARGET_OUT_OF_SCOPE`, `ACCOUNT_RESTRICTED`, `RATE_LIMITED`, and `OUTBOUND_PROHIBITED`.
+
+`source_access_policy` stores `policy_version`, `allowed_paths` (JSON path prefixes), `account_state`, `rate_limit_per_hour`, and `feed_read`. The founder must register and activate a source, confirm policy evidence, and configure these fields through trusted local core calls. The JSON catalog is research data, not live authorization. `allowed_paths` defaults to `/` for the registered host; use a narrower prefix when the reviewed permission is narrower. Caller code must still use a guarded HTTP client: this policy check is an authorization decision, not a complete DNS-rebinding defense. The current Brave, Freelancer and RSS connectors use one pinned-IP HTTPS fetch per authorized operation, reject redirects, and cap response bytes.
+
+API reads and writes (except `/api/health`) require `X-Admin-Token` matching configured `ACQ_ADMIN_TOKEN` of at least 16 characters. If unset, requests fail closed. Core founder-only decisions require the `founder_session(token)` context; an `actor='founder'` string alone grants nothing. CLI founder commands use the same configured token. Do not put the token in audit payloads, URLs, or exception text.
+
+Candidate storage remains `core.add_lead()` with `EXPLICIT_PROJECT` or `POTENTIAL_ACCOUNT`; an extracted candidate stays unverified. Kilo may map its `POTENTIAL_DEMAND` DTO to `POTENTIAL_ACCOUNT` in an adapter. Never mark buyer verification, availability, contact, or payment from extraction alone.
+
+## Fixture collector integration API v1
+
+The integration branch consumes Kilo's public
+`BrowserWorker(policy, fixtures_dir=...)` constructor,
+`configure(allowed_domains=...)`, `navigate(run_id, source_id, url)`, and
+`extract(run_id, source_id, url)` methods. `extract` returns an
+`ExtractionResult` with `candidates`; each candidate must supply its own
+`source_url`, nonempty title and description, and `source_id`. The injected
+policy is `core.CorePolicyPort` or a tracing subclass that delegates each
+decision to it. Navigation and extraction are separate authorized actions.
+
+`acqsys.integration` supplies only an instrumented in-memory fixture
+filesystem through the public `fixtures_dir` argument. It does not call a
+private worker member, implement HTML parsing, or create a network/browser
+transport. The adapter rejects absent fixture reads, empty output,
+out-of-scope candidate URLs and invalid DTOs before central intake, and
+deduplicates candidate URLs. It
+binds each accepted candidate URL to the fixture page SHA-256 for distinct
+local evidence; Kilo's own per-card locator remains required before live
+source activation. Central SQLite stores run cursor/status, leads,
+observations, founder tasks, memory, and the hash-chain audit. Resume reads
+the central source/URL binding and invokes the same public methods with fresh
+core policy checks; Kilo's optional-callback `WorkflowState.resume()` is not
+an authorization path in this integration.

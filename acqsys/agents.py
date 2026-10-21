@@ -2,9 +2,11 @@
 Agent behavior is deterministic without an LLM API; a configured LLM may draft, never send.
 """
 import ipaddress
+import http.client
 import json
 import os
 import socket
+import ssl
 import urllib.parse
 import uuid
 from html import unescape
@@ -20,7 +22,7 @@ USER_AGENT='AIClientAcquisition/0.1 (permissioned research; contact: configured-
 
 def _safe_public_url(url):
     p=urllib.parse.urlsplit(url)
-    if p.scheme not in ('https','http') or p.username or p.password or not p.hostname:
+    if p.scheme!='https' or p.username or p.password or not p.hostname or any(core._sensitive_url_key(k) for k,_ in urllib.parse.parse_qsl(p.query)):
         raise ValueError('only public HTTP(S) endpoints supported')
     # Mitigates SSRF against obvious/private endpoints; re-validate after DNS
     host=p.hostname
@@ -28,12 +30,39 @@ def _safe_public_url(url):
         raise ValueError('private host forbidden')
     try:
         infos=socket.getaddrinfo(host,None,type=socket.SOCK_STREAM)
+        addresses=[]
         for entry in infos:
             addr=ipaddress.ip_address(entry[4][0])
             if not addr.is_global: raise ValueError('non-public IP address forbidden')
+            addresses.append(str(addr))
     except socket.gaierror as exc:
         raise ValueError('unable to resolve public host') from exc
-    return url
+    if not addresses:raise ValueError('unable to resolve public host')
+    return p,addresses[0]
+
+
+def _guarded_https_get(url,max_bytes=1_000_000,headers=None):
+    """Fetch one HTTPS resource using the checked IP, original SNI/Host, and no redirects."""
+    parsed,ip=_safe_public_url(url)
+    class PinnedHTTPSConnection(http.client.HTTPSConnection):
+        def connect(self):
+            raw=socket.create_connection((ip,self.port),timeout=self.timeout)
+            try:self.sock=self._context.wrap_socket(raw,server_hostname=self.host)
+            except Exception:
+                raw.close()
+                raise
+    conn=PinnedHTTPSConnection(parsed.hostname,parsed.port or 443,timeout=REQUEST_TIMEOUT,context=ssl.create_default_context())
+    try:
+        target=parsed.path or '/'
+        if parsed.query:target+='?'+parsed.query
+        conn.request('GET',target,headers={'User-Agent':USER_AGENT,'Accept-Encoding':'identity',**(headers or {})})
+        response=conn.getresponse()
+        if response.status<200 or response.status>=300:
+            raise ValueError('feed returned non-success HTTP status')
+        body=response.read(max_bytes+1)
+        if len(body)>max_bytes:raise ValueError('feed exceeds 1MB size ceiling')
+        return body
+    finally:conn.close()
 
 
 def audited_agent(name,operation,fn,context=None):
@@ -60,20 +89,23 @@ def brave_discover(queries=None,demand_type='EXPLICIT_PROJECT',limit_per_query=5
     if len(terms)>20:raise ValueError('maximum 20 queries per run')
     def run(rid):
         out=[]
-        with httpx.Client(timeout=REQUEST_TIMEOUT,follow_redirects=False) as client:
-            for q in terms:
-                core.record_event('discovery_agent','SOURCE_REQUEST',{'service':'brave','query':q},'run',rid,rid)
-                response=client.get('https://api.search.brave.com/res/v1/web/search',params={'q':q,'count':min(20,max(1,limit_per_query))},headers={'Accept':'application/json','X-Subscription-Token':key,'User-Agent':USER_AGENT})
-                response.raise_for_status()
-                hits=response.json().get('web',{}).get('results',[])
-                core.record_event('discovery_agent','SOURCE_RESPONSE',{'service':'brave','result_count':len(hits),'status_code':response.status_code},'run',rid,rid)
-                for h in hits:
-                    try:
-                        outcome=core.add_lead({'source':'brave_search','source_url':h['url'],'title':h.get('title') or 'Search result','description':h.get('description') or '',
-                          'demand_type':demand_type},'discovery_agent',rid)
-                        out.append({'url':h['url'],'title':h.get('title',''),'created':outcome['created'],'id':outcome['id']})
-                    except (KeyError,ValueError):
-                        continue
+        for q in terms:
+            if core._redact(q)!=q:raise ValueError('search query contains credential-shaped text')
+            endpoint='https://api.search.brave.com/res/v1/web/search'
+            url=endpoint+'?'+urllib.parse.urlencode({'q':q,'count':min(20,max(1,limit_per_query))})
+            decision=core.policy_check('brave_search_api','official_api',url)
+            if not decision.allowed:raise ValueError('Brave source access denied: '+decision.reason_code)
+            core.record_event('discovery_agent','SOURCE_REQUEST',{'service':'brave','query':q},'run',rid,rid)
+            body=_guarded_https_get(url,max_bytes=2_000_000,headers={'Accept':'application/json','X-Subscription-Token':key})
+            hits=json.loads(body).get('web',{}).get('results',[])
+            core.record_event('discovery_agent','SOURCE_RESPONSE',{'service':'brave','result_count':len(hits),'status_code':200},'run',rid,rid)
+            for h in hits:
+                try:
+                    outcome=core.add_lead({'source':'brave_search','source_url':h['url'],'title':h.get('title') or 'Search result','description':h.get('description') or '',
+                      'demand_type':demand_type},'discovery_agent',rid)
+                    out.append({'url':core.normalize_url(h['url']),'title':core._redact(h.get('title','')),'created':outcome['created'],'id':outcome['id']})
+                except (KeyError,ValueError):
+                    continue
         return out
     return audited_agent('discovery_agent','BRAVE_SEARCH',run,{'queries':terms,'demand_type':demand_type})
 
@@ -85,15 +117,11 @@ def _xml_text(e, localname):
 
 
 def rss_discover(feed_url,source_name='allowed_feed',limit=30,demand_type='EXPLICIT_PROJECT',approved=False):
-    if not approved:raise ValueError('founder must confirm the feed is permitted for automated consumption')
-    _safe_public_url(feed_url)
+    decision=core.policy_check(source_name,'feed_read',feed_url)
+    if not decision.allowed:raise ValueError('feed source access denied: '+decision.reason_code)
     def run(rid):
         core.record_event('discovery_agent','SOURCE_REQUEST',{'feed_url':feed_url},'run',rid,rid)
-        with httpx.Client(timeout=REQUEST_TIMEOUT,follow_redirects=False) as client:
-            r=client.get(feed_url,headers={'User-Agent':USER_AGENT})
-            r.raise_for_status()
-            if len(r.content)>1_000_000:raise ValueError('feed exceeds 1MB size ceiling')
-        root=ET.fromstring(r.content)
+        root=ET.fromstring(_guarded_https_get(feed_url))
         items=[x for x in root.iter() if x.tag.split('}')[-1] in ('item','entry')][:min(100,limit)]
         output=[]
         for entry in items:
@@ -115,21 +143,18 @@ def rss_discover(feed_url,source_name='allowed_feed',limit=30,demand_type='EXPLI
 
 
 def freelancer_discover(query,limit=20):
-    """Requires official API OAuth token and optional third-party SDK. No HTML scraping."""
+    """Query the official read-only project API over the pinned HTTPS transport."""
     token=os.getenv('FREELANCER_OAUTH_TOKEN')
     if not token:raise ValueError('FREELANCER_OAUTH_TOKEN missing; official API was not called')
-    try:
-        from freelancersdk.session import Session
-        from freelancersdk.resources.projects.projects import search_projects
-        from freelancersdk.resources.projects.helpers import create_search_projects_filter
-    except ImportError as exc:
-        raise ValueError('Install optional official SDK: pip install freelancersdk') from exc
+    endpoint='https://www.freelancer.com/api/projects/0.1/projects/active/'
+    if core._redact(query)!=query:raise ValueError('search query contains credential-shaped text')
+    request_url=endpoint+'?'+urllib.parse.urlencode({'query':query,'limit':min(max(limit,1),100),'sort_field':'time_updated','or_search_query':'true'})
     def run(rid):
+        decision=core.policy_check('freelancer_official_api','official_api',request_url)
+        if not decision.allowed:raise ValueError('Freelancer source access denied: '+decision.reason_code)
         core.record_event('discovery_agent','SOURCE_REQUEST',{'service':'freelancer_api','query':query},'run',rid,rid)
-        session=Session(oauth_token=token)
-        filt=create_search_projects_filter(sort_field='time_updated',or_search_query=True)
-        result=search_projects(session,query=query,search_filter=filt)
-        # Official SDK result structures vary by version; tolerate dict and list.
+        body=_guarded_https_get(request_url,max_bytes=2_000_000,headers={'Accept':'application/json','Freelancer-OAuth-V1':token})
+        result=json.loads(body).get('result',{})
         raw=result.get('projects',[]) if isinstance(result,dict) else result
         out=[]
         for proj in list(raw or [])[:min(limit,100)]:
