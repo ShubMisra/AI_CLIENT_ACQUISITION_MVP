@@ -1,0 +1,5 @@
+[page: 1]
+Q: Where can users upload documents?
+A: Users can upload PDF files from the Documents screen.
+Q: Are sources shown with answers?
+A: Evidence includes a document name and page number.
