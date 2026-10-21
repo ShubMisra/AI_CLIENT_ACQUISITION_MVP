@@ -135,8 +135,8 @@ not production access or buyer verification authorities.
 The smallest business-path change adds founder-authenticated
 `POST /api/intake/founder` for one registered `MANUAL_ONLY` source and up to
 50 founder-provided records. The request validates the whole batch before
-writing, binds each HTTPS URL to the approved source domain, and rejects
-missing descriptions, invalid budget ranges and demand types. Existing
+writing, binds each HTTPS URL to the approved public source domain, and rejects
+private hosts, missing descriptions, invalid budget ranges and demand types. Existing
 `core.ingest_manual_lead` scores, deduplicates and persists each candidate.
 Central observations and one founder review task record what remains to be
 verified. Existing `agents.evidence_driven_proposal` stores one deterministic

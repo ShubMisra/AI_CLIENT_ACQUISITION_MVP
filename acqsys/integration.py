@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import math
 from pathlib import Path
@@ -33,6 +34,13 @@ def prepare_founder_candidates(*, source_id: str, candidates: list[dict],
            not source['human_supplied_lead_processing']:
             raise PermissionError('founder source is not approved for manual intake')
         domain = source['domain'].lower()
+        if domain == 'localhost' or domain.endswith(('.local', '.internal')):
+            raise PermissionError('private manual source denied')
+        try:
+            if not ipaddress.ip_address(domain).is_global:
+                raise PermissionError('private manual source denied')
+        except ValueError:
+            pass
         validated = []
         for raw in candidates:
             if not isinstance(raw, dict) or raw.get('source') not in (None, source_id):

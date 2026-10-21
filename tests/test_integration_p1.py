@@ -220,9 +220,22 @@ def test_founder_batch_denies_unapproved_or_invalid_candidate_before_writes():
     with pytest.raises(ValueError, match='outside approved'):
         prepare_founder_candidates(source_id='manual_fixture', candidates=[good, bad],
                                    run_id='invalid_batch', founder_token=TOKEN)
+    with pytest.raises(ValueError, match='budget range'):
+        prepare_founder_candidates(source_id='manual_fixture',
+                                   candidates=[{**good, 'budget_min': 500, 'budget_max': 100}],
+                                   run_id='invalid_budget', founder_token=TOKEN)
     with pytest.raises(PermissionError):
         prepare_founder_candidates(source_id='unknown', candidates=[good],
                                    run_id='unknown_source', founder_token=TOKEN)
+    with core.founder_session(TOKEN):
+        core.register_source('private_fixture', '127.0.0.1',
+                             'Synthetic private source', 'MARKETPLACE', actor='founder')
+        for state in ('EVALUATING', 'POLICY_REVIEW', 'AWAITING_FOUNDER', 'MANUAL_ONLY'):
+            core.transition_source('private_fixture', state, actor='founder')
+    with pytest.raises(PermissionError, match='private'):
+        prepare_founder_candidates(source_id='private_fixture',
+                                   candidates=[{**good, 'source_url': 'https://127.0.0.1/project/1'}],
+                                   run_id='private_source', founder_token=TOKEN)
     assert core.list_leads() == [] and core.list_tasks() == []
     assert core.verify_audit()['valid']
 
