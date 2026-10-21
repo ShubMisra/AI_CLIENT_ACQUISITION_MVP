@@ -1,0 +1,5 @@
+[page: 1]
+Q: What information is required for a refund request?
+A: Include the order identifier and purchase date.
+Q: When are escalations reviewed?
+A: Escalations are reviewed each weekday morning.
