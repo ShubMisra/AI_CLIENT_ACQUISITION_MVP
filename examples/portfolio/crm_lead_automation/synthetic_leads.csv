@@ -1,0 +1,17 @@
+lead_id,name,company,email,interest
+L001,Alex Reed,Northstar Labs,alex.reed@example.org,RAG chatbot
+L002, Alex  Reed ,Northstar Labs,alex.reed@example.org,RAG chatbot
+L003,A. Reed,Northstar Labs,,RAG chatbot
+L004,Dana Ortiz,Blue River Co,dana.ortiz@example.org,ETL pipeline
+L005,Dana Ortiz,Blue River Co,dana.alt@example.org,ETL pipeline
+L006,Mina Chen,Greenline,mina@example.org,AI chatbot
+L007,Yasmin Ali,Zenith,y.ali@example.org,forecasting
+L008,Jordan Blake,Harbor,bad-address,workflow automation
+L009,Ravi Shah,,ravi@example.org,data migration
+L010,Samira Noor,Lumen,samira@example.org,SQL cleanup
+L011,Samira Noor,Lumen,samira@example.org,SQL cleanup
+L012,Noah Park,Atlas,noah@example.org,Power BI dashboard
+L013,Lila Stone,Atlas,lila@example.org,RAG optimization
+L014,Tara Roy,Greenline,tara@example.org,API integration
+L015,Uma Desai,Skyworks,uma@example.org,document OCR
+L016,Leo Fox,Beacon,leo@example.org,other request
