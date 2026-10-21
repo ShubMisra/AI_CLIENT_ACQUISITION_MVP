@@ -1,0 +1,8 @@
+[page: 1]
+Q: What is the support response time?
+A: Support responds within two business days.
+Q: How do I reset an account password?
+A: Use the Reset Password link and follow the emailed steps.
+[page: 2]
+Q: How long is the refund window?
+A: Refund requests are accepted within fourteen days of purchase.
