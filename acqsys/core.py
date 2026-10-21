@@ -985,7 +985,7 @@ def is_automated_action_allowed(source_id,action,actor='system',target_url=None)
     return policy_check(source_id,action,target).allowed
 
 
-def ingest_manual_lead(source_id,lead_data,actor='founder'):
+def ingest_manual_lead(source_id,lead_data,actor='founder',correlation_id=None):
     """Founder-supplied lead for a MANUAL_ONLY source; routed through add_lead for dedup, classification, scoring and audit."""
     if actor!='founder':
         record_event(actor,'ACTION_DENIED',{'reason':'manual lead intake requires founder','source_id':source_id},'source',source_id)
@@ -1003,7 +1003,7 @@ def ingest_manual_lead(source_id,lead_data,actor='founder'):
         raise ValueError(reason)
     item=dict(lead_data or {})
     item['source']=source_id
-    correlation_id=str(uuid.uuid4())
+    correlation_id=correlation_id or str(uuid.uuid4())
     result=add_lead(item,actor=actor,correlation_id=correlation_id)
     record_event(actor,'MANUAL_LEAD_INTAKE',{'source_id':source_id,'lead_id':result['id'],'created':result['created'],'title':str(item.get('title') or '')[:200],'source_url':item.get('source_url')},'source',source_id,correlation_id=correlation_id)
     return {'source_id':source_id,'lead_id':result['id'],'created':result['created'],'score':result.get('score'),'correlation_id':correlation_id}

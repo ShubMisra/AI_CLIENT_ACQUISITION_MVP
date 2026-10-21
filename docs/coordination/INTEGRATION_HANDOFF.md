@@ -118,3 +118,49 @@ Kilo APIs must be corrected and independently retested before live use.
 The fixture-only result does not verify current buyer availability, source
 terms, payment evidence, or real browser/DNS containment. No source was
 activated, no buyer was contacted, and no merge into `main` was made.
+
+## Business intake follow-up — 2026-10-21
+
+This section supersedes the earlier Kilo-head and fixture-only pipeline status
+above. Integration branch `feat/codex-p1-integration` merged Kilo PR #4's
+published `902b9fd1a7bfe8e3cec7d23ef6483258fb4e344b` as `03e3676`.
+Kilo's branch and worktree were not edited. The latest delta includes distinct
+card evidence, a qualification alias, a shortlist formatter, and additional
+negative tests. Central `CorePolicyPort`, SQLite, audit and run state remain
+authoritative; Kilo's fixture policy, workflow checkpoint and shortlist are
+not production access or buyer verification authorities.
+
+The smallest business-path change adds founder-authenticated
+`POST /api/intake/founder` for one registered `MANUAL_ONLY` source and up to
+50 founder-provided records. The request validates the whole batch before
+writing, binds each HTTPS URL to the approved source domain, and rejects
+missing descriptions, invalid budget ranges and demand types. Existing
+`core.ingest_manual_lead` scores, deduplicates and persists each candidate.
+Central observations and one founder review task record what remains to be
+verified. Existing `agents.evidence_driven_proposal` stores one deterministic
+draft per lead, marked unsent and requiring founder approval. The permitted
+synthetic fixture path uses the same draft step; repeat intake reuses drafts.
+No model endpoint or customer communication is involved.
+
+The Kilo `BrowserWorker` used by the fixture bridge now checks HTTPS,
+userinfo, port and private IP literals without DNS resolution before calling
+the central policy port. The bridge still rejects invalid card targets before
+lead intake. Kilo's standalone `AllowFixturePolicy` and `WorkflowState` remain
+outside this integration's trust boundary and require independent correction
+before any real source work.
+
+The synthetic end-to-end demo uses only reserved `fixture.example` and
+`manual.example` records in a temporary database. Observed local output:
+`new_leads=2`, `duplicates_on_repeat=2`, `founder_provided_new=1`,
+`founder_duplicates_on_repeat=1`, `scored_leads=3`, `founder_tasks=3`,
+`unsent_proposal_drafts=3`, `unverified_leads=3`, `paying_clients=0`,
+`audit_valid=true`. The combined local full suite passes **99 tests** with
+one upstream Starlette/httpx warning. Exact final SHA and Actions runs are
+recorded in draft PR #5 after publication.
+
+Follow-up files: `acqsys/core.py`, `acqsys/integration.py`,
+`acqsys/acquisition/browser.py`, `acqsys/app.py`,
+`tests/test_integration_p1.py`, `scripts/demo_p1_fixture.py`, and this handoff.
+The merge also carries Kilo's reviewed fixture modules and tests. The source
+policy register does not authorize a live crawl, and no current buyer,
+availability, payment or conversion claim follows from the test data.

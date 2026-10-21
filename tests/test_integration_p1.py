@@ -7,8 +7,11 @@ import pytest
 
 from acqsys import core
 from acqsys.integration import (FixtureTransport, run_fixture_pilot,
-                                resume_fixture_pilot, import_historical_candidates)
+                                resume_fixture_pilot, import_historical_candidates,
+                                prepare_founder_candidates)
 from acqsys import integration
+from acqsys.app import app
+from fastapi.testclient import TestClient
 
 
 TOKEN = 'fixture-founder-token'
@@ -153,6 +156,11 @@ def test_public_single_page_extraction_two_distinct_url_leads_and_durable_review
     assert len({row['candidate']['content_evidence_ref'] for row in first['results']}) == 2
     assert len(core.list_leads()) == 2
     assert len(core.list_tasks()) == 2
+    assert all(row['score'] > 0 and row['review_task_id'] and row['draft_artifact_id']
+               for row in first['results'])
+    assert all(len(core.list_artifacts(lead['id'])) == 1 and
+               'NOT been sent' in core.list_artifacts(lead['id'])[0]['content']
+               for lead in core.list_leads())
     assert all(not lead['buyer_verified'] and lead['status'] == 'DISCOVERED'
                for lead in core.list_leads())
     assert all(obs['verification_status'] == 'UNVERIFIED' and
@@ -164,6 +172,70 @@ def test_public_single_page_extraction_two_distinct_url_leads_and_durable_review
     assert len(second['results']) == 2
     assert all(row['created'] is False for row in second['results'])
     assert len(core.list_leads()) == 2 and len(core.list_tasks()) == 2
+    assert all(len(core.list_artifacts(lead['id'])) == 1 for lead in core.list_leads())
+    assert core.verify_audit()['valid']
+
+
+def test_founder_provided_synthetic_api_intake_scores_tasks_and_drafts():
+    with core.founder_session(TOKEN):
+        core.register_source('manual_fixture', 'manual.example',
+                             'Synthetic founder source', 'MARKETPLACE', actor='founder')
+        for state in ('EVALUATING', 'POLICY_REVIEW', 'AWAITING_FOUNDER', 'MANUAL_ONLY'):
+            core.transition_source('manual_fixture', state, actor='founder')
+    candidate = {'source_url': 'https://manual.example/project/1',
+                 'title': 'Synthetic document classification request',
+                 'description': 'Test-only AI/ML classification scope supplied by the founder.',
+                 'budget_min': 500, 'currency': 'USD'}
+    payload = {'source_id': 'manual_fixture', 'run_id': 'synthetic_founder_1',
+               'candidates': [candidate]}
+    with TestClient(app) as client:
+        assert client.post('/api/intake/founder', json=payload).status_code == 403
+        response = client.post('/api/intake/founder', json=payload,
+                               headers={'X-Admin-Token': TOKEN})
+        assert response.status_code == 200, response.text
+        first = response.json()['results'][0]
+        repeat = client.post('/api/intake/founder', json=payload,
+                             headers={'X-Admin-Token': TOKEN}).json()['results'][0]
+    assert first['created'] and not repeat['created']
+    assert first['lead_id'] == repeat['lead_id']
+    assert first['review_task_id'] == repeat['review_task_id']
+    assert first['draft_artifact_id'] == repeat['draft_artifact_id']
+    lead = core.get_lead(first['lead_id'])
+    assert lead['score'] == first['score'] > 0 and not lead['buyer_verified']
+    assert lead['status'] == 'DISCOVERED'
+    assert len(core.list_tasks()) == len(core.list_artifacts(lead['id'])) == 1
+    assert 'NOT been sent' in core.list_artifacts(lead['id'])[0]['content']
+    assert core.summary()['paying_clients'] == 0 and core.verify_audit()['valid']
+
+
+def test_founder_batch_denies_unapproved_or_invalid_candidate_before_writes():
+    with core.founder_session(TOKEN):
+        core.register_source('manual_fixture', 'manual.example',
+                             'Synthetic founder source', 'MARKETPLACE', actor='founder')
+        for state in ('EVALUATING', 'POLICY_REVIEW', 'AWAITING_FOUNDER', 'MANUAL_ONLY'):
+            core.transition_source('manual_fixture', state, actor='founder')
+    good = {'source_url': 'https://manual.example/project/1', 'title': 'Test only',
+            'description': 'Synthetic ML work request'}
+    bad = {**good, 'source_url': 'https://other.example/project/2'}
+    with pytest.raises(ValueError, match='outside approved'):
+        prepare_founder_candidates(source_id='manual_fixture', candidates=[good, bad],
+                                   run_id='invalid_batch', founder_token=TOKEN)
+    with pytest.raises(PermissionError):
+        prepare_founder_candidates(source_id='unknown', candidates=[good],
+                                   run_id='unknown_source', founder_token=TOKEN)
+    assert core.list_leads() == [] and core.list_tasks() == []
+    assert core.verify_audit()['valid']
+
+
+def test_integrated_fixture_policy_denial_never_queries_dns(monkeypatch):
+    import socket
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda *_a, **_k:
+                        (_ for _ in ()).throw(AssertionError('DNS called')))
+    source(paths=['/listing'])
+    transport = FixtureTransport({LISTING_URL: CARDS})
+    result = run_fixture_pilot(source_id='fixture', urls=[LISTING_URL],
+                               transport=transport, run_id='no_dns_fixture')
+    assert result['status'] == 'COMPLETED' and len(result['results']) == 2
     assert core.verify_audit()['valid']
 
 

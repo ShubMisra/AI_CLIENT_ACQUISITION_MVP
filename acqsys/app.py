@@ -5,7 +5,7 @@ from fastapi import FastAPI, Header, HTTPException, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional
-from . import core, agents
+from . import core, agents, integration
 
 @asynccontextmanager
 async def lifespan(app):
@@ -35,6 +35,9 @@ def guard(x_admin_token: Optional[str]=Header(default=None)):
 
 def execute(fn):
     try:return fn()
+    except PermissionError:
+        core.record_event('policy_guard','ACTION_DENIED',{'reason_code':'SOURCE_AUTH_REQUIRED'},'system','request')
+        raise HTTPException(status_code=403,detail='Source authorization required')
     except ValueError as exc:
         reason=core._redact(str(exc))[:400]
         core.record_event('policy_guard','ACTION_DENIED',{'reason':reason},'system','request')
@@ -52,6 +55,11 @@ class LeadIn(BaseModel):
     currency: Optional[str]=None
     budget_min: Optional[float]=None
     budget_max: Optional[float]=None
+
+class FounderCandidatesIn(BaseModel):
+    source_id: str
+    run_id: str
+    candidates: list[LeadIn]
 
 class VerifyIn(BaseModel):
     verified: bool
@@ -141,6 +149,14 @@ def lead_batch(body:list[LeadIn]):
     for lead in body:
         result.append(execute(lambda x=lead:core.add_lead(x.model_dump(),actor='founder_research_import')))
     return result
+
+@app.post('/api/intake/founder',dependencies=[Depends(guard)])
+def founder_intake(body:FounderCandidatesIn, x_admin_token:Optional[str]=Header(default=None)):
+    return execute(lambda:integration.prepare_founder_candidates(
+        source_id=body.source_id,
+        candidates=[{**candidate.model_dump(), 'source': body.source_id}
+                    for candidate in body.candidates],
+        run_id=body.run_id, founder_token=x_admin_token))
 
 @app.get('/api/leads')
 def leads(status:Optional[str]=None,limit:int=100):return core.list_leads(min(max(limit,1),500),status)

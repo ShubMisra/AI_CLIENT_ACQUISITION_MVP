@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List
 from urllib.parse import urljoin, urlparse
 import ipaddress
-import socket
 
 
 @dataclass
@@ -32,23 +31,18 @@ class BrowserWorker:
     def _validate_target(self, target_url: str) -> tuple:
         try:
             parsed = urlparse(target_url)
-            if parsed.scheme not in ("http", "https"):
+            if parsed.scheme != "https":
                 raise PermissionError("INVALID_SCHEME")
             hostname = parsed.hostname or ""
-            if not hostname:
+            if not hostname or parsed.username or parsed.password or parsed.port not in (None, 443):
                 raise PermissionError("INVALID_TARGET_URL")
             if hostname in ("localhost",) or hostname.endswith((".local", ".internal")):
                 raise PermissionError("PRIVATE_HOST_FORBIDDEN")
             try:
-                infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
-                for entry in infos:
-                    addr = ipaddress.ip_address(entry[4][0])
-                    if not addr.is_global:
-                        raise PermissionError("PRIVATE_HOST_FORBIDDEN")
-            except PermissionError:
-                raise
-            except Exception:
-                pass
+                if not ipaddress.ip_address(hostname).is_global:
+                    raise PermissionError("PRIVATE_HOST_FORBIDDEN")
+            except ValueError:
+                pass  # DNS is never queried by this fixture-only worker.
         except PermissionError:
             raise
         except Exception:

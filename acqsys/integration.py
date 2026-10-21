@@ -3,14 +3,80 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from acqsys import core
+from acqsys import agents, core
 from acqsys.acquisition.browser import BrowserWorker
 from acqsys.acquisition.lead_qual import deduplicate
 
 HISTORICAL_FILE = Path(__file__).resolve().parent.parent / 'lead_candidates_2026-10-10.json'
+
+
+def _ensure_draft(lead_id: str) -> str:
+    """Use the existing deterministic, unsent draft once per persisted lead."""
+    prior = [a for a in core.list_artifacts(lead_id) if a['kind'] == 'PROPOSAL_DRAFT']
+    if prior:
+        return prior[0]['id']
+    return agents.evidence_driven_proposal(lead_id)['result']['artifact_id']
+
+
+def prepare_founder_candidates(*, source_id: str, candidates: list[dict],
+                               run_id: str, founder_token: str) -> dict:
+    """Founder-supplied MANUAL_ONLY records to scored leads, review tasks and drafts."""
+    if not isinstance(candidates, list) or not 1 <= len(candidates) <= 50:
+        raise ValueError('expected 1..50 founder candidates')
+    with core.founder_session(founder_token), core.audit_correlation(run_id):
+        source = core.get_source(source_id)
+        if not source or source['lifecycle_state'] != 'MANUAL_ONLY' or \
+           not source['human_supplied_lead_processing']:
+            raise PermissionError('founder source is not approved for manual intake')
+        domain = source['domain'].lower()
+        validated = []
+        for raw in candidates:
+            if not isinstance(raw, dict) or raw.get('source') not in (None, source_id):
+                raise ValueError('invalid candidate or source binding')
+            title, description, url = raw.get('title'), raw.get('description'), raw.get('source_url')
+            if not all(isinstance(v, str) and v.strip() for v in (title, description, url)):
+                raise ValueError('candidate title, description and URL required')
+            if len(title) > 300 or len(description) > 4000 or len(url) > 2048 or \
+               raw.get('demand_type', 'EXPLICIT_PROJECT') not in core.DEMAND_TYPES:
+                raise ValueError('candidate content or demand type invalid')
+            normalized = core.normalize_url(url)
+            parsed = urlsplit(normalized)
+            if parsed.scheme != 'https' or parsed.hostname != domain or parsed.port not in (None, 443):
+                raise ValueError('candidate URL outside approved HTTPS source')
+            for key in ('budget_min', 'budget_max'):
+                value = raw.get(key)
+                if value is not None and (type(value) not in (int, float) or
+                                          not math.isfinite(value) or value < 0):
+                    raise ValueError('invalid stated budget')
+            if raw.get('budget_min') is not None and raw.get('budget_max') is not None and \
+               raw['budget_max'] < raw['budget_min']:
+                raise ValueError('stated budget range invalid')
+            validated.append({**raw, 'source': source_id, 'source_url': normalized,
+                              'verification_status': 'UNVERIFIED',
+                              'availability_status': 'UNKNOWN'})
+        results = []
+        for item in validated:
+            lead = core.ingest_manual_lead(source_id, item, correlation_id=run_id)
+            evidence = 'founder-record:sha256:' + hashlib.sha256(
+                json.dumps(item, sort_keys=True, default=str).encode()).hexdigest()
+            core.record_candidate_observation(lead['lead_id'], run_id, source_id,
+                                              evidence, 'founder-manual-source:' + source_id)
+            task_id, _ = core.ensure_founder_review_task(
+                lead['lead_id'], 'Verify candidate buyer, freshness and source evidence',
+                actor='founder')
+            draft_id = _ensure_draft(lead['lead_id'])
+            persisted = core.get_lead(lead['lead_id'])
+            results.append({'lead_id': lead['lead_id'], 'created': lead['created'],
+                            'score': persisted['score'], 'review_task_id': task_id,
+                            'draft_artifact_id': draft_id,
+                            'verification_status': 'UNVERIFIED',
+                            'availability_status': 'UNKNOWN'})
+        return {'run_id': run_id, 'source_id': source_id, 'results': results,
+                'drafts_sent': 0}
 
 
 class _FixturePath:
@@ -145,8 +211,12 @@ def run_fixture_pilot(*, source_id: str, urls: list[str], transport: FixtureTran
                     if task_created:
                         core.record_event('acquisition_agent', 'HUMAN_TASK_CREATED',
                                           {'task_id': task_id}, 'lead', lead['id'])
+                    draft_id = _ensure_draft(lead['id'])
                     page_results.append({'candidate': candidate, 'lead_id': lead['id'],
-                                         'created': lead['created']})
+                                         'created': lead['created'],
+                                         'score': core.get_lead(lead['id'])['score'],
+                                         'review_task_id': task_id,
+                                         'draft_artifact_id': draft_id})
                 if not page_results:
                     raise ValueError('no grounded candidates')
                 results.extend(page_results)
