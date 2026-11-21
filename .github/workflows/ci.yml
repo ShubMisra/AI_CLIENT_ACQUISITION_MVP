@@ -15,12 +15,16 @@ jobs:
           python-version: '3.11'
           cache: pip
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt pytest
+        run: python -m pip install -r requirements.txt -r examples/portfolio/grounded_pdf_rag/requirements.txt pytest
       - name: Compile
         run: python -m compileall -q acqsys tests scripts
       - name: Whitespace check
         run: git diff --check
       - name: Tests (fixtures and mocked transports only)
         run: python -m pytest -q
+      - name: Frozen synthetic PDF evaluation (offline)
+        run: |
+          python examples/portfolio/grounded_pdf_rag/pdf_corpus/build.py --check
+          python examples/portfolio/grounded_pdf_rag/evaluate_pdf.py
       - name: Public extractor to central lead demo (fixture only)
         run: python -m scripts.demo_p1_fixture
