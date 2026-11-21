@@ -177,6 +177,7 @@ def test_retrieval_uses_pdf_passages_not_question_labels(pages):
 def test_frozen_evaluation_has_explicit_denominators_and_no_heldout_run():
     report = evaluate()
     assert report["question_count"] == 24
+    assert report["question_set_sha256"] == "45ac31f90d9fee67363082a25e7b4ed89eb4b689149bc36b46818e66b5d858d1"
     assert report["retrieval_recall_at_3"]["denominator"] == 14
     assert report["ambiguous_abstentions"]["denominator"] == 4
     assert report["unanswerable_abstentions"]["denominator"] == 6

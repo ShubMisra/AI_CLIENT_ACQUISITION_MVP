@@ -14,8 +14,9 @@ QUESTIONS = HERE / "pdf_corpus" / "evaluation_questions.json"
 
 
 def evaluate() -> dict:
-    source = QUESTIONS.read_bytes()
-    cases = json.loads(source)["cases"]
+    source = json.loads(QUESTIONS.read_text(encoding="utf-8"))
+    canonical_questions = json.dumps(source, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    cases = source["cases"]
     pages = load_pdf_pages()
     passages = make_passages(pages)
     answerable = [case for case in cases if case["expected"] is not None]
@@ -49,7 +50,7 @@ def evaluate() -> dict:
     ordered = sorted(timings)
     return {
         "fixture": "FICTIONAL_SYNTHETIC_PDF_ONLY",
-        "question_set_sha256": hashlib.sha256(source).hexdigest(),
+        "question_set_sha256": hashlib.sha256(canonical_questions).hexdigest(),
         "frozen_at_commit": "97c3d16e9ba4de430398693ea1f762e8b959a947",
         "question_count": len(cases),
         "unit_tests_included_in_question_count": False,
